@@ -20,7 +20,7 @@ complete**; later phases are not built yet.
 | Phase | Scope | State |
 | ----- | ----- | ----- |
 | 1 | Data layer — D1 schema + fetch → dedupe → store | ✅ Done |
-| 2 | Cron automation (15-min ingestion) | ⬜ Planned |
+| 2 | Cron automation (15-min ingestion) | ✅ Done |
 | 3 | Terminal backend (Durable Object + WebSockets) | ⬜ Planned |
 | 4 | Terminal frontend (xterm.js) | ⬜ Planned |
 | 5 | Real-time alerts | ⬜ Planned |
