@@ -27,7 +27,12 @@ import {
   matchesWatch,
   type WatchFilter,
 } from "../lib/commands";
-import { color, renderAlertBanner, renderWelcome } from "../lib/format";
+import {
+  color,
+  renderAlertBanner,
+  renderWelcome,
+  resolveTimeZone,
+} from "../lib/format";
 import { rowsToGeoJSON } from "../lib/geojson";
 
 /** Magnitude at or above which an alert also rings the terminal bell (Phase 8). */
@@ -50,11 +55,13 @@ interface RateWindow {
 /**
  * State attached to each WebSocket via `serializeAttachment`, so it survives DO
  * hibernation (an in-memory field would be wiped when the DO is evicted): the
- * Phase 8 alert filter plus the command rate-limit counter.
+ * Phase 8 alert filter, the command rate-limit counter, and the browser's IANA
+ * timezone (sent as `?tz=` on the /ws URL) used to localise rendered times.
  */
 interface SocketState {
   watch: WatchFilter | null;
   rate?: RateWindow;
+  tz?: string;
 }
 
 /** Read a socket's persisted state, tolerating the legacy bare-filter format. */
@@ -65,7 +72,11 @@ function readSocketState(ws: WebSocket): SocketState {
   } catch {
     raw = null;
   }
-  if (raw && typeof raw === "object" && ("watch" in raw || "rate" in raw)) {
+  if (
+    raw &&
+    typeof raw === "object" &&
+    ("watch" in raw || "rate" in raw || "tz" in raw)
+  ) {
     return raw as SocketState;
   }
   // Pre-throttle attachment: a bare WatchFilter (Phase 8) or null.
@@ -127,13 +138,20 @@ export class TerminalHub extends DurableObject<Env> {
     // DO can be evicted while the socket stays open.
     this.ctx.acceptWebSocket(server);
 
+    // The browser sends its IANA timezone as ?tz= (public/app.js) so every
+    // frame we render — welcome, command output, alerts — shows the viewer's
+    // local clock. Validate it here (an Intl round-trip) and persist it in the
+    // socket attachment so it survives hibernation; missing/invalid → UTC.
+    const tz = resolveTimeZone(new URL(request.url).searchParams.get("tz"));
+    writeSocketState(server, { watch: null, tz });
+
     // The welcome frame is the `banner` command's year-at-a-glance summary,
     // with its GeoJSON attached so the map shows markers as soon as the page
     // opens. A D1 hiccup must not break connecting, so fall back to the plain
     // static welcome screen.
     let welcome: { text: string; mapData?: unknown };
     try {
-      welcome = await buildBanner(this.env);
+      welcome = await buildBanner(this.env, tz);
     } catch (error) {
       console.error("Welcome banner build failed:", error);
       welcome = { text: renderWelcome() };
@@ -207,6 +225,7 @@ export class TerminalHub extends DurableObject<Env> {
       const { text, mapData, download, watch } = await executeCommand(
         parsed.line,
         this.env,
+        state.tz,
       );
       // Phase 8: `watch`/`unwatch` store an alert filter on this very socket
       // (alongside the rate counter in the same attachment, so both survive DO
@@ -237,28 +256,38 @@ export class TerminalHub extends DurableObject<Env> {
   /**
    * Broadcast newly-ingested earthquakes to every connected terminal
    * (Phase 5). Called as an RPC by the Worker's `scheduled()` handler after a
-   * cron ingest finds unseen records. We render the banner once and fan it out
-   * over every live socket — including sockets whose DO was hibernating, which
-   * `getWebSockets()` still returns. Send failures on individual sockets are
+   * cron ingest finds unseen records. Banner timestamps are rendered in each
+   * socket's stored timezone, so unfiltered frames are cached per zone and
+   * reused across sockets sharing it. `getWebSockets()` also returns sockets
+   * whose DO was hibernating. Send failures on individual sockets are
    * swallowed so one dead connection can't abort the broadcast.
    */
   broadcastNewEarthquakes(records: EarthquakeRow[]): void {
     if (records.length === 0) return;
 
-    // Unfiltered frame, rendered once and reused for every socket without a
-    // `watch` subscription (the common case).
-    const allFrame = this.alertFrame(records);
+    // Unfiltered frames keyed by timezone, rendered once per zone and reused
+    // for every socket without a `watch` subscription (the common case).
+    const framesByZone = new Map<string, string>();
 
     for (const ws of this.ctx.getWebSockets()) {
       // A `watch` filter is stored in this socket's attachment (Phase 8). A null
       // filter means "send every alert" — the pre-Phase-8 behaviour.
-      const filter = readSocketState(ws).watch;
+      const state = readSocketState(ws);
+      const filter = state.watch;
 
-      let frame = allFrame;
+      let frame: string;
       if (filter) {
-        const visible = records.filter((r) => matchesWatch(r, filter!));
+        const visible = records.filter((r) => matchesWatch(r, filter));
         if (visible.length === 0) continue; // nothing this terminal cares about
-        frame = this.alertFrame(visible);
+        frame = this.alertFrame(visible, state.tz);
+      } else {
+        const zoneKey = state.tz ?? "";
+        let cached = framesByZone.get(zoneKey);
+        if (cached === undefined) {
+          cached = this.alertFrame(records, state.tz);
+          framesByZone.set(zoneKey, cached);
+        }
+        frame = cached;
       }
 
       try {
@@ -270,17 +299,18 @@ export class TerminalHub extends DurableObject<Env> {
   }
 
   /**
-   * Build one `alert` frame for a set of records: the rendered banner, the map
-   * upsert data, and a `bell` flag the client uses to ring the terminal bell
-   * when something significant (≥ {@link BELL_MAGNITUDE}) arrives.
+   * Build one `alert` frame for a set of records: the rendered banner (times
+   * in the receiving socket's timezone), the map upsert data, and a `bell`
+   * flag the client uses to ring the terminal bell when something significant
+   * (≥ {@link BELL_MAGNITUDE}) arrives.
    */
-  private alertFrame(records: EarthquakeRow[]): string {
+  private alertFrame(records: EarthquakeRow[], tz?: string): string {
     const peak = Math.max(
       ...records.map((r) => r.magdefault ?? -Infinity),
     );
     return JSON.stringify({
       type: "alert",
-      text: renderAlertBanner(records),
+      text: renderAlertBanner(records, tz),
       // Phase 6: the map upserts these points without clearing existing ones.
       mapData: rowsToGeoJSON(records),
       bell: peak >= BELL_MAGNITUDE,

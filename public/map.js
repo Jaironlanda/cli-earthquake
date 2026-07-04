@@ -254,7 +254,7 @@ function addEarthquakeLayer() {
 			.setLngLat(f.geometry.coordinates)
 			.setHTML(
 				`<strong>M ${mag}</strong> · ${escapeHtml(p.location)}<br>` +
-					`<span class="eq-popup__meta">${escapeHtml(p.time)}` +
+					`<span class="eq-popup__meta">${escapeHtml(formatPopupTime(p.time))}` +
 					`${p.depth != null ? ` · ${p.depth} km deep` : ""}</span>`,
 			)
 			.addTo(map);
@@ -264,6 +264,30 @@ function addEarthquakeLayer() {
 		map.getCanvas().style.cursor = "";
 		popup.remove();
 	});
+}
+
+/**
+ * Popup timestamps arrive as suffix-less UTC ISO strings (the stored
+ * utcdatetime); show them in this browser's timezone as
+ * "MM-DD-YYYY hh:mm AM TZ" to match the terminal's formatting.
+ */
+const POPUP_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
+	year: "numeric",
+	month: "2-digit",
+	day: "2-digit",
+	hour: "2-digit",
+	minute: "2-digit",
+	hour12: true,
+	timeZoneName: "short",
+});
+
+function formatPopupTime(iso) {
+	if (!iso) return "";
+	const ms = Date.parse(/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(iso) ? iso : iso + "Z");
+	if (!Number.isFinite(ms)) return iso;
+	const p = {};
+	for (const part of POPUP_TIME_FORMAT.formatToParts(ms)) p[part.type] = part.value;
+	return `${p.month}-${p.day}-${p.year} ${p.hour}:${p.minute} ${p.dayPeriod} ${p.timeZoneName}`;
 }
 
 /** Minimal HTML escaping for popup text (locations come straight from D1). */

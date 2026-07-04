@@ -76,17 +76,103 @@ function cell(text: string, width: number): string {
 /** Newline used between terminal lines. `\r\n` so xterm.js returns the cursor. */
 export const EOL = "\r\n";
 
+// --- Viewer-timezone time formatting -----------------------------------------
+//
+// Stored timestamps are UTC ISO strings with no zone suffix ("2026-07-05T09:30:00",
+// see ingest.ts). The browser sends its IANA timezone when the WebSocket opens
+// (public/app.js → ?tz=...), the TerminalHub persists it per socket, and every
+// renderer below converts through this formatter so users see their own clock —
+// 12-hour "MM-DD-YYYY hh:mm AM/PM" with the zone named (e.g. GMT+8), falling
+// back to UTC when no (or an invalid) zone was supplied.
+
+/** Formats stored UTC timestamps in one viewer's timezone. */
+export interface TimeFormatter {
+  /** Short zone label for headers/suffixes, e.g. "GMT+8", "PDT", or "UTC". */
+  label: string;
+  /** "07-05-2026 05:30 PM" in the viewer's zone. */
+  dateTime(utc: string): string;
+  /** "07-05-2026" in the viewer's zone. */
+  date(utc: string): string;
+}
+
+/** Return `tz` if it's a usable IANA timezone, else undefined (→ UTC fallback). */
+export function resolveTimeZone(
+  tz: string | null | undefined,
+): string | undefined {
+  if (!tz) return undefined;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Parse a stored timestamp as UTC (suffix-less strings are UTC by convention). */
+function parseUtc(utc: string): Date | null {
+  const iso = /(?:[zZ]|[+-]\d\d:?\d\d)$/.test(utc) ? utc : utc + "Z";
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? new Date(ms) : null;
+}
+
+/** Build a {@link TimeFormatter} for an (already validated or raw) timezone. */
+export function makeTimeFormatter(tz?: string): TimeFormatter {
+  const zone = resolveTimeZone(tz) ?? "UTC";
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+  const label =
+    zone === "UTC"
+      ? "UTC"
+      : (new Intl.DateTimeFormat("en-US", {
+          timeZone: zone,
+          timeZoneName: "short",
+        })
+          .formatToParts(new Date())
+          .find((p) => p.type === "timeZoneName")?.value ?? zone);
+
+  const parts = (d: Date): Record<string, string> => {
+    const map: Record<string, string> = {};
+    for (const p of fmt.formatToParts(d)) map[p.type] = p.value;
+    return map;
+  };
+
+  return {
+    label,
+    dateTime(utc: string): string {
+      const d = parseUtc(utc);
+      if (!d) return utc; // unparseable — show the raw value rather than lie
+      const p = parts(d);
+      return `${p.month}-${p.day}-${p.year} ${p.hour}:${p.minute} ${p.dayPeriod}`;
+    },
+    date(utc: string): string {
+      const d = parseUtc(utc);
+      if (!d) return utc.slice(0, 10);
+      const p = parts(d);
+      return `${p.month}-${p.day}-${p.year}`;
+    },
+  };
+}
+
 /**
  * Render a list of earthquake rows as a fixed-width, colour-coded table.
  * Magnitude is coloured per {@link magnitudeColor}; the header is bold.
+ * Times are shown in the viewer's timezone (`tz`), named in the header.
  */
-export function renderEarthquakeTable(rows: EarthquakeRow[]): string {
+export function renderEarthquakeTable(rows: EarthquakeRow[], tz?: string): string {
   if (rows.length === 0) {
     return dim("No matching earthquakes.");
   }
 
+  const fmt = makeTimeFormatter(tz);
   const columns: Column[] = [
-    { header: "TIME (UTC)", width: 19 },
+    { header: `TIME (${fmt.label})`, width: 19 },
     { header: "MAG", width: 4 },
     { header: "DEPTH", width: 6 },
     { header: "LOCATION", width: 34 },
@@ -99,7 +185,7 @@ export function renderEarthquakeTable(rows: EarthquakeRow[]): string {
   );
 
   const lines = rows.map((row) => {
-    const time = cell(row.utcdatetime.replace("T", " "), columns[0].width);
+    const time = cell(fmt.dateTime(row.utcdatetime), columns[0].width);
     const mag = formatMagnitude(row.magdefault, columns[1].width);
     const depth = cell(
       row.depth === null ? "—" : `${row.depth}km`,
@@ -139,9 +225,9 @@ export interface YearSummary {
  * welcome frame): a framed banner with a seismograph trace and wordmark, a short
  * status readout, an optional year-at-a-glance summary, and a getting-started
  * hint. Pure ANSI + ASCII in the frame (no wide Unicode) so the box stays
- * aligned in xterm.js at any width.
+ * aligned in xterm.js at any width. `tz` localises the summary's timestamps.
  */
-export function renderWelcome(summary?: YearSummary): string {
+export function renderWelcome(summary?: YearSummary, tz?: string): string {
   const W = 54; // inner content width, in characters
   const top = dim("╭" + "─".repeat(W + 2) + "╮");
   const bot = dim("╰" + "─".repeat(W + 2) + "╯");
@@ -178,7 +264,7 @@ export function renderWelcome(summary?: YearSummary): string {
     dim(" for the latest quakes.");
 
   const lines = [...banner, "", ...status];
-  if (summary) lines.push("", ...yearSummaryLines(summary));
+  if (summary) lines.push("", ...yearSummaryLines(summary, tz));
   lines.push("", hint);
   return lines.join(EOL);
 }
@@ -188,7 +274,7 @@ export function renderWelcome(summary?: YearSummary): string {
  * strongest and latest events, average magnitude, and a per-month trend
  * sparkline. Bullet style matches the status readout above it.
  */
-function yearSummaryLines(s: YearSummary): string[] {
+function yearSummaryLines(s: YearSummary, tz?: string): string[] {
   const heading = "  " + bold(color(`${s.year} at a glance`, "cyan"));
   if (s.total === 0) {
     return [heading, dim(`    No earthquakes recorded in ${s.year} yet.`)];
@@ -197,14 +283,15 @@ function yearSummaryLines(s: YearSummary): string[] {
   const bullet = (label: string, value: string) =>
     "  " + color("•", "cyan") + " " + dim(label.padEnd(10)) + value;
 
-  /** One-line event readout: coloured magnitude, location, dimmed UTC time. */
+  /** One-line event readout: coloured magnitude, location, dimmed viewer-tz time. */
+  const fmt = makeTimeFormatter(tz);
   const event = (row: EarthquakeRow) =>
     color(
       row.magdefault === null ? "M?" : `M${row.magdefault.toFixed(1)}`,
       magnitudeColor(row.magdefault),
     ) +
     ` ${row.location ?? "—"}` +
-    dim(`  ${row.utcdatetime.slice(0, 16).replace("T", " ")} UTC`);
+    dim(`  ${fmt.dateTime(row.utcdatetime)} ${fmt.label}`);
 
   const lines = [
     heading,
@@ -250,8 +337,9 @@ const ALERT_MAX_ROWS = 10;
  * (Phase 5). Broadcast to every open terminal by the TerminalHub when the cron
  * ingest finds unseen records. The most significant events (highest magnitude)
  * are shown first, capped at {@link ALERT_MAX_ROWS}, with a count of the rest.
+ * `tz` localises the table's timestamps to the receiving terminal's timezone.
  */
-export function renderAlertBanner(rows: EarthquakeRow[]): string {
+export function renderAlertBanner(rows: EarthquakeRow[], tz?: string): string {
   if (rows.length === 0) return "";
 
   const sorted = [...rows].sort(
@@ -266,7 +354,7 @@ export function renderAlertBanner(rows: EarthquakeRow[]): string {
       `${rows.length} new earthquake${rows.length === 1 ? "" : "s"} detected`,
     );
 
-  const body = renderEarthquakeTable(shown);
+  const body = renderEarthquakeTable(shown, tz);
 
   const lines = [heading, "", body];
   const hidden = rows.length - shown.length;
@@ -336,11 +424,12 @@ export interface QuakeStats {
 }
 
 /** Render the `stats` summary card: totals, extremes, and the strongest event. */
-export function renderStats(stats: QuakeStats): string {
+export function renderStats(stats: QuakeStats, tz?: string): string {
   if (stats.total === 0) {
     return dim("No earthquakes match — nothing to summarise.");
   }
 
+  const fmt = makeTimeFormatter(tz);
   const field = (label: string, value: string) =>
     "  " + dim(label.padEnd(14)) + value;
 
@@ -364,8 +453,8 @@ export function renderStats(stats: QuakeStats): string {
       "Time span",
       stats.first === null
         ? "—"
-        : `${stats.first.slice(0, 10)} → ${(stats.last ?? "").slice(0, 10)}` +
-          dim(` (${spanDays} day${spanDays === 1 ? "" : "s"})`),
+        : `${fmt.date(stats.first)} → ${stats.last === null ? "" : fmt.date(stats.last)}` +
+          dim(` (${spanDays} day${spanDays === 1 ? "" : "s"}, ${fmt.label})`),
     ),
   ];
 
@@ -381,7 +470,7 @@ export function renderStats(stats: QuakeStats): string {
         ) +
           "  " +
           (s.location ?? "—") +
-          dim(`  ${s.utcdatetime.slice(0, 10)}`),
+          dim(`  ${fmt.date(s.utcdatetime)}`),
       ),
     );
   }
@@ -404,6 +493,7 @@ export type RowWithDistance = EarthquakeRow & { distanceKm: number };
 export function renderNearbyTable(
   rows: RowWithDistance[],
   origin: { lat: number; lon: number },
+  tz?: string,
 ): string {
   const head =
     bold(`Earthquakes near ${origin.lat.toFixed(3)}, ${origin.lon.toFixed(3)}`) +
@@ -413,13 +503,14 @@ export function renderNearbyTable(
     return head + EOL + dim("None found within the search radius.");
   }
 
+  const fmt = makeTimeFormatter(tz);
   const gap = "  ";
   const cols = [
     { header: "DIST", width: 8 },
     { header: "MAG", width: 4 },
     { header: "DEPTH", width: 6 },
     { header: "LOCATION", width: 30 },
-    { header: "TIME (UTC)", width: 19 },
+    { header: `TIME (${fmt.label})`, width: 19 },
   ];
   const headerLine = bold(cols.map((c) => c.header.padEnd(c.width)).join(gap));
 
@@ -428,7 +519,7 @@ export function renderNearbyTable(
     const mag = formatMagnitude(r.magdefault, cols[1].width);
     const depth = cell(r.depth === null ? "—" : `${r.depth}km`, cols[2].width);
     const loc = cell(r.location ?? "—", cols[3].width);
-    const time = dim(cell(r.utcdatetime.replace("T", " "), cols[4].width));
+    const time = dim(cell(fmt.dateTime(r.utcdatetime), cols[4].width));
     return [dist, mag, depth, loc, time].join(gap);
   });
 
@@ -595,14 +686,16 @@ export function renderCompare(a: CompareSide, b: CompareSide): string {
 }
 
 /** Render a single earthquake as a detailed key/value block (for `search <id>`). */
-export function renderEarthquakeDetail(row: EarthquakeRow): string {
+export function renderEarthquakeDetail(row: EarthquakeRow, tz?: string): string {
+  const fmt = makeTimeFormatter(tz);
+  // 17 leaves room for the widest zone label (e.g. "Time (GMT+5:30)").
   const field = (label: string, value: string) =>
-    `${dim(label.padEnd(14))}${value}`;
+    `${dim(label.padEnd(17))}${value}`;
 
   return [
     bold(color("Earthquake ", "cyan") + row.id),
-    field("Time (UTC)", row.utcdatetime.replace("T", " ")),
-    field("Time (local)", (row.localdatetime ?? "—").replace("T", " ")),
+    field(`Time (${fmt.label})`, fmt.dateTime(row.utcdatetime)),
+    field("Time (at site)", (row.localdatetime ?? "—").replace("T", " ")),
     field(
       "Magnitude",
       color(

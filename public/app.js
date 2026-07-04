@@ -99,10 +99,21 @@ let ws = null;
 let reconnectDelay = 500; // exponential backoff, capped
 let greeted = false; // have we shown at least one prompt yet?
 
+// The browser's IANA timezone (e.g. "Asia/Kuala_Lumpur"), sent with the
+// connection so the server renders every timestamp — welcome banner, command
+// output, alerts — in this viewer's local time instead of UTC.
+let userTimeZone = "";
+try {
+	userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+} catch {
+	/* no Intl timezone support — the server falls back to UTC */
+}
+
 function connect() {
 	const proto = location.protocol === "https:" ? "wss:" : "ws:";
 	setStatus("connecting", greeted ? "reconnecting…" : "connecting…");
-	ws = new WebSocket(`${proto}//${location.host}/ws`);
+	const tzParam = userTimeZone ? `?tz=${encodeURIComponent(userTimeZone)}` : "";
+	ws = new WebSocket(`${proto}//${location.host}/ws${tzParam}`);
 
 	ws.onopen = () => {
 		reconnectDelay = 500;
