@@ -118,12 +118,30 @@ export function renderEarthquakeTable(rows: EarthquakeRow[]): string {
 }
 
 /**
+ * The year-at-a-glance figures rendered into the welcome/`banner` screen:
+ * headline counts plus the latest and strongest events of the year, and the
+ * per-month buckets behind the trend sparkline.
+ */
+export interface YearSummary {
+  year: string;
+  total: number;
+  maxmag: number | null;
+  avgmag: number | null;
+  /** Events at or above magnitude 5 this year. */
+  significant: number;
+  latest: EarthquakeRow | null;
+  strongest: EarthquakeRow | null;
+  months: TrendBucket[];
+}
+
+/**
  * Render the terminal "init screen" shown once on connect (see TerminalHub's
  * welcome frame): a framed banner with a seismograph trace and wordmark, a short
- * status readout, and a getting-started hint. Pure ANSI + ASCII (no wide Unicode)
- * so the box stays aligned in xterm.js at any width.
+ * status readout, an optional year-at-a-glance summary, and a getting-started
+ * hint. Pure ANSI + ASCII in the frame (no wide Unicode) so the box stays
+ * aligned in xterm.js at any width.
  */
-export function renderWelcome(): string {
+export function renderWelcome(summary?: YearSummary): string {
   const W = 54; // inner content width, in characters
   const top = dim("╭" + "─".repeat(W + 2) + "╮");
   const bot = dim("╰" + "─".repeat(W + 2) + "╯");
@@ -144,7 +162,7 @@ export function renderWelcome(): string {
   ];
 
   const bullet = (label: string, value: string) =>
-    "  " + color("•", "cyan") + " " + dim(label.padEnd(9)) + value;
+    "  " + color("•", "cyan") + " " + dim(label.padEnd(10)) + value;
   const status = [
     bullet("feed", "api.data.gov.my — Malaysia MET"),
     bullet("updates", "every 15 min · real-time alerts on"),
@@ -158,7 +176,69 @@ export function renderWelcome(): string {
     bold(color("list", "cyan")) +
     dim(" for the latest quakes.");
 
-  return [...banner, "", ...status, "", hint].join(EOL);
+  const lines = [...banner, "", ...status];
+  if (summary) lines.push("", ...yearSummaryLines(summary));
+  lines.push("", hint);
+  return lines.join(EOL);
+}
+
+/**
+ * The year-at-a-glance block inside {@link renderWelcome}: headline count,
+ * strongest and latest events, average magnitude, and a per-month trend
+ * sparkline. Bullet style matches the status readout above it.
+ */
+function yearSummaryLines(s: YearSummary): string[] {
+  const heading = "  " + bold(color(`${s.year} at a glance`, "cyan"));
+  if (s.total === 0) {
+    return [heading, dim(`    No earthquakes recorded in ${s.year} yet.`)];
+  }
+
+  const bullet = (label: string, value: string) =>
+    "  " + color("•", "cyan") + " " + dim(label.padEnd(10)) + value;
+
+  /** One-line event readout: coloured magnitude, location, dimmed UTC time. */
+  const event = (row: EarthquakeRow) =>
+    color(
+      row.magdefault === null ? "M?" : `M${row.magdefault.toFixed(1)}`,
+      magnitudeColor(row.magdefault),
+    ) +
+    ` ${row.location ?? "—"}` +
+    dim(`  ${row.utcdatetime.slice(0, 16).replace("T", " ")} UTC`);
+
+  const lines = [
+    heading,
+    bullet(
+      "total",
+      `${s.total} earthquake${s.total === 1 ? "" : "s"}` +
+        (s.significant > 0
+          ? dim(" · ") + color(`${s.significant} at mag 5+`, "yellow")
+          : ""),
+    ),
+  ];
+  if (s.strongest) lines.push(bullet("strongest", event(s.strongest)));
+  if (s.latest) lines.push(bullet("latest", event(s.latest)));
+  if (s.avgmag !== null) {
+    lines.push(bullet("avg mag", s.avgmag.toFixed(2)));
+  }
+  if (s.months.length > 1) {
+    const maxCount = Math.max(...s.months.map((m) => m.count));
+    const spark = s.months
+      .map((m) => {
+        const level =
+          maxCount === 0
+            ? 0
+            : Math.round((m.count / maxCount) * (SPARK_CHARS.length - 1));
+        return color(SPARK_CHARS[level], magnitudeColor(m.maxmag));
+      })
+      .join("");
+    lines.push(
+      bullet(
+        "by month",
+        spark + dim(`  ${s.months[0].bucket} → ${s.months[s.months.length - 1].bucket}`),
+      ),
+    );
+  }
+  return lines;
 }
 
 /** Cap on how many rows a single alert banner enumerates before summarising. */

@@ -14,12 +14,19 @@
  *                     {"type":"download","filename","mime","content","text"}
  *                                                             (Phase 7 export)
  *                     {"type":"error","text":"..."}          (internal failure)
- *                     {"type":"welcome","text":"..."}         (on connect)
+ *                     {"type":"welcome","text":"...","mapData":{...}}
+ *                                        (on connect — the year banner + its
+ *                                         GeoJSON so the map plots markers)
  */
 
 import { DurableObject } from "cloudflare:workers";
 import type { Env, EarthquakeRow } from "../types";
-import { executeCommand, matchesWatch, type WatchFilter } from "../lib/commands";
+import {
+  buildBanner,
+  executeCommand,
+  matchesWatch,
+  type WatchFilter,
+} from "../lib/commands";
 import { color, renderAlertBanner, renderWelcome } from "../lib/format";
 import { rowsToGeoJSON } from "../lib/geojson";
 
@@ -120,8 +127,23 @@ export class TerminalHub extends DurableObject<Env> {
     // DO can be evicted while the socket stays open.
     this.ctx.acceptWebSocket(server);
 
+    // The welcome frame is the `banner` command's year-at-a-glance summary,
+    // with its GeoJSON attached so the map shows markers as soon as the page
+    // opens. A D1 hiccup must not break connecting, so fall back to the plain
+    // static welcome screen.
+    let welcome: { text: string; mapData?: unknown };
+    try {
+      welcome = await buildBanner(this.env);
+    } catch (error) {
+      console.error("Welcome banner build failed:", error);
+      welcome = { text: renderWelcome() };
+    }
     server.send(
-      JSON.stringify({ type: "welcome", text: this.welcomeBanner() }),
+      JSON.stringify({
+        type: "welcome",
+        text: welcome.text,
+        mapData: welcome.mapData,
+      }),
     );
 
     return new Response(null, { status: 101, webSocket: client });
@@ -280,10 +302,5 @@ export class TerminalHub extends DurableObject<Env> {
   /** Log transport errors; the runtime closes the socket for us. */
   override async webSocketError(_ws: WebSocket, error: unknown): Promise<void> {
     console.error("WebSocket error:", error);
-  }
-
-  /** The init screen written to a freshly connected terminal. */
-  private welcomeBanner(): string {
-    return renderWelcome();
   }
 }

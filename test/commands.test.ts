@@ -314,9 +314,18 @@ describe("matchesWatch", () => {
 });
 
 describe("banner", () => {
-  it("reprints the welcome screen", async () => {
-    const { text } = await executeCommand("banner", env);
-    expect(stripAnsi(text)).toContain("E A R T H Q U A K E");
+  it("shows the welcome art plus a year-at-a-glance summary", async () => {
+    const { text, mapData } = await executeCommand("banner", env);
+    const plain = stripAnsi(text);
+    expect(plain).toContain("E A R T H Q U A K E");
+    // Year is derived from the newest seeded row (2026-07-01 Jakarta).
+    expect(plain).toContain("2026 at a glance");
+    expect(plain).toContain("3 earthquakes");
+    expect(plain).toContain("2 at mag 5+"); // 6.2 Aceh + 5.5 Jakarta
+    expect(plain).toContain("M6.2 Aceh, Indonesia"); // strongest
+    expect(plain).toContain("M5.5 Jakarta, Indonesia"); // latest
+    // The year's rows ride along as map markers.
+    expect(mapData?.features).toHaveLength(3);
   });
 });
 
