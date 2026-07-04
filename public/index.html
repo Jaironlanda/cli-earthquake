@@ -21,6 +21,19 @@
 		<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 		<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 
+		<!--
+			MapLibre GL JS renders the earthquake map panel (Phase 6); the Protomaps
+			basemaps helper builds the vector-tile style when a key is configured.
+			Both are global builds (window.maplibregl / window.basemaps), matching
+			the project's no-build-step CDN convention.
+		-->
+		<link
+			rel="stylesheet"
+			href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.css"
+		/>
+		<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+		<script src="https://cdn.jsdelivr.net/npm/@protomaps/basemaps@5/dist/basemaps.js"></script>
+
 		<link rel="stylesheet" href="/styles.css" />
 	</head>
 	<body>
@@ -35,13 +48,12 @@
 			<main id="split">
 				<!-- xterm.js mounts here -->
 				<section id="terminal" aria-label="Terminal"></section>
-				<!-- Map panel is filled in Phase 6. -->
-				<section id="map" aria-label="Map">
-					<div class="map-placeholder">Map panel — coming in a later phase</div>
-				</section>
+				<!-- MapLibre GL mounts here (Phase 6). -->
+				<section id="map" aria-label="Earthquake map"></section>
 			</main>
 		</div>
 
+		<script src="/map.js"></script>
 		<script type="module" src="/app.js"></script>
 	</body>
 </html>

@@ -21,6 +21,17 @@ import {
   renderEarthquakeDetail,
   renderEarthquakeTable,
 } from "./format";
+import { rowsToGeoJSON, type EarthquakeFeatureCollection } from "./geojson";
+
+/**
+ * The result of running a command: ANSI `text` for the terminal, plus optional
+ * `mapData` (Phase 6) that the browser plots on the MapLibre panel. Commands
+ * that return rows (`list`, `search`) attach `mapData`; `help` and errors don't.
+ */
+export interface CommandResult {
+  text: string;
+  mapData?: EarthquakeFeatureCollection;
+}
 
 /** Columns selected for every row-returning query (matches EarthquakeRow). */
 const ROW_COLUMNS = `id, utcdatetime, localdatetime, lat, lon, depth,
@@ -123,7 +134,7 @@ function parseListFilters(tokens: string[]): ListFilters {
 }
 
 /** Run the `list` query with the parsed filters. */
-async function runList(env: Env, tokens: string[]): Promise<string> {
+async function runList(env: Env, tokens: string[]): Promise<CommandResult> {
   const filters = parseListFilters(tokens);
 
   const where: string[] = [];
@@ -155,14 +166,15 @@ async function runList(env: Env, tokens: string[]): Promise<string> {
     .bind(...binds)
     .all<EarthquakeRow>();
 
-  return renderEarthquakeTable(results ?? []);
+  const rows = results ?? [];
+  return { text: renderEarthquakeTable(rows), mapData: rowsToGeoJSON(rows) };
 }
 
 /**
  * Run the `search` command. A single 16-hex-char token is treated as an id
  * (exact lookup → detail view); anything else is a free-text location search.
  */
-async function runSearch(env: Env, tokens: string[]): Promise<string> {
+async function runSearch(env: Env, tokens: string[]): Promise<CommandResult> {
   const query = tokens.join(" ").trim();
   if (!query) {
     throw new CommandError("Usage: search <id | location text>");
@@ -176,7 +188,12 @@ async function runSearch(env: Env, tokens: string[]): Promise<string> {
       .bind(query.toLowerCase())
       .first<EarthquakeRow>();
 
-    if (row) return renderEarthquakeDetail(row);
+    if (row) {
+      return {
+        text: renderEarthquakeDetail(row),
+        mapData: rowsToGeoJSON([row]),
+      };
+    }
     // Fall through to text search if no id matched.
   }
 
@@ -191,7 +208,8 @@ async function runSearch(env: Env, tokens: string[]): Promise<string> {
     .bind(like, like, DEFAULT_LIMIT)
     .all<EarthquakeRow>();
 
-  return renderEarthquakeTable(results ?? []);
+  const rows = results ?? [];
+  return { text: renderEarthquakeTable(rows), mapData: rowsToGeoJSON(rows) };
 }
 
 /** The static help text, colour-coded to match the table output. */
@@ -216,13 +234,17 @@ function helpText(): string {
 }
 
 /**
- * Parse and execute a single command line. Returns formatted terminal output.
+ * Parse and execute a single command line. Returns formatted terminal output
+ * plus, for row-returning commands, `mapData` for the map panel (Phase 6).
  * User-facing problems (bad flags, unknown commands) return a friendly error
  * string; unexpected failures (e.g. D1 errors) are re-thrown for the caller.
  */
-export async function executeCommand(line: string, env: Env): Promise<string> {
+export async function executeCommand(
+  line: string,
+  env: Env,
+): Promise<CommandResult> {
   const tokens = tokenize(line.trim());
-  if (tokens.length === 0) return "";
+  if (tokens.length === 0) return { text: "" };
 
   const [command, ...args] = tokens;
 
@@ -230,7 +252,7 @@ export async function executeCommand(line: string, env: Env): Promise<string> {
     switch (command.toLowerCase()) {
       case "help":
       case "?":
-        return helpText();
+        return { text: helpText() };
       case "list":
       case "ls":
         return await runList(env, args);
@@ -238,15 +260,16 @@ export async function executeCommand(line: string, env: Env): Promise<string> {
       case "find":
         return await runSearch(env, args);
       default:
-        return (
-          color(`Unknown command: ${command}`, "red") +
-          EOL +
-          dim('Type "help" for a list of commands.')
-        );
+        return {
+          text:
+            color(`Unknown command: ${command}`, "red") +
+            EOL +
+            dim('Type "help" for a list of commands.'),
+        };
     }
   } catch (error) {
     if (error instanceof CommandError) {
-      return color(`Error: ${error.message}`, "red");
+      return { text: color(`Error: ${error.message}`, "red") };
     }
     throw error;
   }

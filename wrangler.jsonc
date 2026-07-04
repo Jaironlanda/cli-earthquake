@@ -12,9 +12,15 @@
 		"directory": "./public",
 		// Access static assets from the Worker via env.ASSETS.fetch(request).
 		"binding": "ASSETS",
-		// Invoke the Worker (not the static-asset server) for admin routes and
-		// the WebSocket terminal endpoint.
-		"run_worker_first": ["/admin/*", "/ws"]
+		// Invoke the Worker (not the static-asset server) for admin routes, the
+		// WebSocket terminal endpoint, and the JSON config API (Phase 6).
+		"run_worker_first": ["/admin/*", "/ws", "/api/*"]
+	},
+	// Phase 6: Protomaps basemap key handed to the browser via GET /api/config.
+	// This is a publishable (domain-restrictable) key, not a secret — set your
+	// own from protomaps.com/dashboard. Leave "" to run with a plain dark canvas.
+	"vars": {
+		"PROTOMAPS_KEY": ""
 	},
 	// Durable Object: TerminalHub holds every WebSocket terminal session (Phase 3).
 	// A single instance is addressed by name ("global-hub") in src/index.ts.
