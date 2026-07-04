@@ -73,12 +73,19 @@ export interface UpsertResult {
   fetched: number;
   /** How many rows were newly inserted (i.e. not already present). */
   inserted: number;
+  /**
+   * The rows that were actually newly inserted this run. Phase 5 broadcasts
+   * these to open terminals as real-time alerts, so we return the rows
+   * themselves, not just the count.
+   */
+  insertedRows: EarthquakeRow[];
 }
 
 /**
  * Upsert records into D1 using batched `INSERT OR IGNORE`. Because `id` is the
- * primary key, already-stored events are ignored. Returns the number of rows
- * actually inserted (summed from each statement's `meta.changes`).
+ * primary key, already-stored events are ignored. Each statement inserts one
+ * row, so a statement whose `meta.changes` is non-zero identifies a genuinely
+ * new record — those rows are collected and returned for alert fan-out.
  */
 export async function upsertEarthquakes(
   db: D1Database,
@@ -93,7 +100,7 @@ export async function upsertEarthquakes(
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
 
-  let inserted = 0;
+  const insertedRows: EarthquakeRow[] = [];
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const chunk = rows.slice(i, i + BATCH_SIZE);
     const statements = chunk.map((row) =>
@@ -112,12 +119,14 @@ export async function upsertEarthquakes(
       ),
     );
     const results = await db.batch(statements);
-    for (const result of results) {
-      inserted += result.meta?.changes ?? 0;
-    }
+    // `batch()` preserves order, so result[j] corresponds to chunk[j]: a
+    // non-zero `changes` means that row was newly inserted (not a dedupe hit).
+    results.forEach((result, j) => {
+      if ((result.meta?.changes ?? 0) > 0) insertedRows.push(chunk[j]);
+    });
   }
 
-  return { fetched: records.length, inserted };
+  return { fetched: records.length, inserted: insertedRows.length, insertedRows };
 }
 
 /** Convenience: run the full fetch → upsert pipeline. */

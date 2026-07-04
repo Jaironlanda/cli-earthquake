@@ -145,8 +145,17 @@ function handleServerMessage(msg) {
 			busy = false;
 			newPrompt();
 			break;
+		case "alert":
+			// Real-time push (Phase 5): can arrive at any moment, including
+			// mid-typing. Drop to a fresh line, print the banner, then restore
+			// the prompt + whatever the user had half-typed. While a command is
+			// in flight (busy) its own reply will redraw the prompt, so we skip
+			// the restore to avoid a stray prompt above the pending output.
+			term.write("\r\n" + msg.text + "\r\n\r\n");
+			if (!busy && greeted) render();
+			break;
 		default:
-			// Unknown types (e.g. Phase 5 "alert") are ignored for now.
+			// Unknown future message types are ignored.
 			break;
 	}
 }

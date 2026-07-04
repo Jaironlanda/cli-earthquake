@@ -9,9 +9,9 @@ earthquake data from `api.data.gov.my`, built on Cloudflare Workers. The full,
 phased build is described in `planning/implementation-plan.md`; `planning/project-draft.md`
 holds the original spec. Work proceeds one phase at a time, each on its own branch.
 
-**Phases 1 (data layer), 2 (cron automation), 3 (terminal backend), and 4
-(xterm.js terminal frontend) are done** — the rest of the plan (real-time alerts,
-Protomaps map, export) is not built yet.
+**Phases 1 (data layer), 2 (cron automation), 3 (terminal backend), 4
+(xterm.js terminal frontend), and 5 (real-time alerts) are done** — the rest of
+the plan (Protomaps map, export) is not built yet.
 
 Current code:
 
@@ -23,18 +23,24 @@ Current code:
   `scheduled()` cron handler runs the same idempotent pipeline every 15 minutes.
 - `src/lib/ingest.ts` — `computeId()` (truncated SHA-256 of `utcdatetime|lat|lon`,
   giving each record a stable id since the API has none), `fetchLatestEarthquakes()`,
-  `upsertEarthquakes()` (batched `INSERT OR IGNORE` → idempotent ingestion).
+  `upsertEarthquakes()` (batched `INSERT OR IGNORE` → idempotent ingestion). Returns
+  `insertedRows` (the actually-new rows, keyed off each statement's `meta.changes`)
+  so Phase 5 can broadcast them.
 - `src/durable-objects/terminal-hub.ts` — `TerminalHub extends DurableObject<Env>`.
   Uses the **WebSocket Hibernation API** (`ctx.acceptWebSocket`), so the DO can be
   evicted while sockets stay open (matters for Phase 5 alert fan-out).
   `webSocketMessage()` parses `{type:"input",line}`, calls `executeCommand()`, and
-  replies `{type:"output",text}` (or `welcome` / `error`).
+  replies `{type:"output",text}` (or `welcome` / `error`). `broadcastNewEarthquakes()`
+  is an RPC method (called by `scheduled()`, not over `.fetch()`) that renders one
+  alert banner and `ws.send`s `{type:"alert",text}` to every `ctx.getWebSockets()`.
 - `src/lib/commands.ts` — `executeCommand(line, env)`: quote-aware tokenizer, parses
   `help`, `list [--mag>N] [--since DATE] [--location STR] [--limit N]`,
   `search <id|text>`, and runs **parameterized** D1 queries. User-facing problems
   return a friendly error string; unexpected errors are re-thrown.
 - `src/lib/format.ts` — ANSI helpers, magnitude→colour severity mapping, and
   fixed-width table + detail renderers. Uses `\r\n` line endings for xterm.js.
+  `renderAlertBanner()` formats the Phase 5 push (top-magnitude rows first, capped
+  at 10 with a "…and N more" summary).
 - `src/types.ts` — `Env` bindings (incl. `TERMINAL_HUB`) + `EarthquakeApiRecord` /
   `EarthquakeRow`.
 - `migrations/0001_init.sql` — `earthquakes` table, indexed on `utcdatetime`,
@@ -47,9 +53,11 @@ Current code:
   `/ws` WebSocket, and **hand-rolls the prompt/line editor** via `term.onData()`
   (xterm.js has no built-in shell): buffered line with insert-at-cursor, Enter,
   backspace, ←/→, ↑/↓ history (with draft stash), Home/End, Ctrl+A/E/U/L/C. Sends
-  `{type:"input",line}`; on `welcome`/`output`/`error` writes the ANSI text back
-  (unknown types like Phase 5 `alert` are ignored). A `busy` flag gates input while
-  a command is in flight; auto-reconnects with backoff (welcome only greets once).
+  `{type:"input",line}`; on `welcome`/`output`/`error` writes the ANSI text back.
+  A server-pushed `{type:"alert"}` can arrive at any time: it prints the banner then
+  re-renders the prompt + half-typed line (skipped while `busy`, since the pending
+  reply redraws the prompt itself). A `busy` flag gates input while a command is in
+  flight; auto-reconnects with backoff (welcome only greets once).
 - `public/styles.css` — full-viewport flex split (terminal | map placeholder) plus
   a title-bar connection-status indicator; stacks vertically under 800px.
 
