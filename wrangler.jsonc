@@ -22,6 +22,17 @@
 	"vars": {
 		"PROTOMAPS_KEY": ""
 	},
+	// Rate limiting: throttle WebSocket connection attempts per client IP so a
+	// script can't open sockets in a tight loop (spam/DDoS mitigation). Counted
+	// at the edge Worker before the /ws upgrade reaches the TerminalHub DO.
+	// Per-command spam is throttled separately inside the DO (see terminal-hub.ts).
+	"ratelimits": [
+		{
+			"name": "WS_CONNECT_LIMIT",
+			"namespace_id": "1001",
+			"simple": { "limit": 60, "period": 60 }
+		}
+	],
 	// Durable Object: TerminalHub holds every WebSocket terminal session (Phase 3).
 	// A single instance is addressed by name ("global-hub") in src/index.ts.
 	"durable_objects": {

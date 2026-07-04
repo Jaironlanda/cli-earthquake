@@ -26,6 +26,65 @@ import { rowsToGeoJSON } from "../lib/geojson";
 /** Magnitude at or above which an alert also rings the terminal bell (Phase 8). */
 const BELL_MAGNITUDE = 5;
 
+/**
+ * Per-socket command throttle: at most RATE_MAX inputs per RATE_WINDOW_MS, so a
+ * script can't flood one open socket with commands (each runs a D1 query). Set
+ * well above a human's typing rate (2 cmd/s sustained) but far below a flood.
+ */
+const RATE_WINDOW_MS = 10_000;
+const RATE_MAX = 20;
+
+/** Fixed-window command counter persisted per socket (survives hibernation). */
+interface RateWindow {
+  windowStart: number;
+  count: number;
+}
+
+/**
+ * State attached to each WebSocket via `serializeAttachment`, so it survives DO
+ * hibernation (an in-memory field would be wiped when the DO is evicted): the
+ * Phase 8 alert filter plus the command rate-limit counter.
+ */
+interface SocketState {
+  watch: WatchFilter | null;
+  rate?: RateWindow;
+}
+
+/** Read a socket's persisted state, tolerating the legacy bare-filter format. */
+function readSocketState(ws: WebSocket): SocketState {
+  let raw: unknown;
+  try {
+    raw = ws.deserializeAttachment();
+  } catch {
+    raw = null;
+  }
+  if (raw && typeof raw === "object" && ("watch" in raw || "rate" in raw)) {
+    return raw as SocketState;
+  }
+  // Pre-throttle attachment: a bare WatchFilter (Phase 8) or null.
+  return { watch: (raw as WatchFilter | null) ?? null };
+}
+
+/** Persist a socket's state (in-memory tag, restored after hibernation). */
+function writeSocketState(ws: WebSocket, state: SocketState): void {
+  ws.serializeAttachment(state);
+}
+
+/**
+ * Advance the fixed-window counter for one inbound command; returns false once
+ * the socket has exceeded RATE_MAX within the current window. Mutates `state`.
+ */
+function tickRateLimit(state: SocketState): boolean {
+  const now = Date.now();
+  const rate = state.rate;
+  if (!rate || now - rate.windowStart >= RATE_WINDOW_MS) {
+    state.rate = { windowStart: now, count: 1 };
+    return true;
+  }
+  rate.count += 1;
+  return rate.count <= RATE_MAX;
+}
+
 /** Shape of an inbound client message. */
 interface InputMessage {
   type: "input";
@@ -78,6 +137,23 @@ export class TerminalHub extends DurableObject<Env> {
     ws: WebSocket,
     message: string | ArrayBuffer,
   ): Promise<void> {
+    // Hibernation-safe per-socket throttle: count this frame in the socket's
+    // persisted state and persist it immediately, so the counter is kept even
+    // if the DO is evicted between messages. Over-limit frames are dropped with
+    // a friendly notice rather than tearing the socket down.
+    const state = readSocketState(ws);
+    const allowed = tickRateLimit(state);
+    writeSocketState(ws, state);
+    if (!allowed) {
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          text: color("Slow down — too many commands. Try again shortly.", "red"),
+        }),
+      );
+      return;
+    }
+
     let parsed: unknown;
     try {
       const text =
@@ -110,12 +186,13 @@ export class TerminalHub extends DurableObject<Env> {
         parsed.line,
         this.env,
       );
-      // Phase 8: `watch`/`unwatch` store an alert filter on this very socket.
-      // We use serializeAttachment so the subscription survives DO hibernation
-      // (getWebSockets() + deserializeAttachment() recover it during broadcast).
-      // `null` clears the filter; `undefined` leaves it as-is.
+      // Phase 8: `watch`/`unwatch` store an alert filter on this very socket
+      // (alongside the rate counter in the same attachment, so both survive DO
+      // hibernation — getWebSockets() + deserializeAttachment() recover them at
+      // broadcast time). `null` clears the filter; `undefined` leaves it as-is.
       if (watch !== undefined) {
-        ws.serializeAttachment(watch);
+        state.watch = watch;
+        writeSocketState(ws, state);
       }
       // Phase 7: `export` yields a file; the client saves it and prints `text`
       // as the confirmation. Everything else is a normal ANSI output frame.
@@ -151,14 +228,9 @@ export class TerminalHub extends DurableObject<Env> {
     const allFrame = this.alertFrame(records);
 
     for (const ws of this.ctx.getWebSockets()) {
-      // A `watch` filter is stored as this socket's attachment (Phase 8). No
-      // attachment (null) means "send every alert" — the pre-Phase-8 behaviour.
-      let filter: WatchFilter | null = null;
-      try {
-        filter = ws.deserializeAttachment() as WatchFilter | null;
-      } catch {
-        filter = null;
-      }
+      // A `watch` filter is stored in this socket's attachment (Phase 8). A null
+      // filter means "send every alert" — the pre-Phase-8 behaviour.
+      const filter = readSocketState(ws).watch;
 
       let frame = allFrame;
       if (filter) {

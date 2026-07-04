@@ -57,9 +57,14 @@ export default {
 
     // Phase 6: hand the browser the Protomaps basemap key (a publishable,
     // domain-restrictable key — safe to expose to the client). Empty string
-    // when unset; the map then falls back to a plain dark canvas.
+    // when unset; the map then falls back to a plain dark canvas. The response
+    // is static, so let Cloudflare's edge cache it for an hour: repeat page
+    // loads then skip the Worker entirely (spam/DDoS mitigation).
     if (url.pathname === "/api/config") {
-      return Response.json({ protomapsKey: env.PROTOMAPS_KEY ?? "" });
+      return Response.json(
+        { protomapsKey: env.PROTOMAPS_KEY ?? "" },
+        { headers: { "Cache-Control": "public, max-age=3600" } },
+      );
     }
 
     // WebSocket terminal: route to the single global TerminalHub instance.
@@ -68,6 +73,14 @@ export default {
         return new Response("Expected a WebSocket upgrade request", {
           status: 426,
         });
+      }
+      // Throttle connection attempts per client IP before touching the DO, so a
+      // script can't open sockets in a tight loop. Per-command spam over an
+      // already-open socket is throttled inside the DO (terminal-hub.ts).
+      const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+      const { success } = await env.WS_CONNECT_LIMIT.limit({ key: ip });
+      if (!success) {
+        return new Response("Too Many Requests", { status: 429 });
       }
       const stub = env.TERMINAL_HUB.getByName(TERMINAL_HUB_NAME);
       return stub.fetch(request);
