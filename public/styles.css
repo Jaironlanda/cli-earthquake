@@ -120,20 +120,58 @@ body {
 }
 
 #map {
+	position: relative;
 	flex: 1 1 40%;
 	min-width: 0;
 	border-left: 1px solid var(--border);
 	background: var(--panel);
-	display: flex;
-	align-items: center;
-	justify-content: center;
 }
 
-.map-placeholder {
+/* MapLibre injects its own canvas; fill the panel. */
+#map .maplibregl-map {
+	position: absolute;
+	inset: 0;
+}
+
+/* Dark-theme the MapLibre chrome (controls, popups) to match the terminal. */
+#map .maplibregl-ctrl-group {
+	background: var(--panel);
+	border: 1px solid var(--border);
+}
+
+#map .maplibregl-ctrl-group button + button {
+	border-top: 1px solid var(--border);
+}
+
+#map .maplibregl-ctrl-group button span {
+	filter: invert(1) hue-rotate(180deg);
+}
+
+#map .maplibregl-ctrl-attrib {
+	background: rgba(11, 15, 20, 0.75);
+}
+
+#map .maplibregl-ctrl-attrib a {
 	color: var(--muted);
-	font-size: 0.85rem;
-	text-align: center;
-	padding: 1rem;
+}
+
+.eq-popup .maplibregl-popup-content {
+	background: var(--panel);
+	color: var(--fg);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	font-size: 0.78rem;
+	padding: 0.5rem 0.65rem;
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.eq-popup .maplibregl-popup-tip {
+	border-top-color: var(--border);
+	border-bottom-color: var(--border);
+}
+
+.eq-popup__meta {
+	color: var(--muted);
 }
 
 /* Stack the panels on narrow screens. */

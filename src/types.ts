@@ -12,6 +12,11 @@ export interface Env {
   ADMIN_TOKEN: string;
   /** Durable Object namespace for the WebSocket terminal hub (Phase 3). */
   TERMINAL_HUB: DurableObjectNamespace<import("./durable-objects/terminal-hub").TerminalHub>;
+  /**
+   * Publishable Protomaps basemap key served to the browser via /api/config
+   * (Phase 6). Empty string when unset — the map then uses a plain dark canvas.
+   */
+  PROTOMAPS_KEY: string;
 }
 
 /**

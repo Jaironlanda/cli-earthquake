@@ -19,6 +19,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env, EarthquakeRow } from "../types";
 import { executeCommand } from "../lib/commands";
 import { bold, color, dim, EOL, renderAlertBanner } from "../lib/format";
+import { rowsToGeoJSON } from "../lib/geojson";
 
 /** Shape of an inbound client message. */
 interface InputMessage {
@@ -100,8 +101,8 @@ export class TerminalHub extends DurableObject<Env> {
     }
 
     try {
-      const text = await executeCommand(parsed.line, this.env);
-      ws.send(JSON.stringify({ type: "output", text }));
+      const { text, mapData } = await executeCommand(parsed.line, this.env);
+      ws.send(JSON.stringify({ type: "output", text, mapData }));
     } catch (error) {
       console.error("Command execution failed:", error);
       ws.send(
@@ -127,6 +128,8 @@ export class TerminalHub extends DurableObject<Env> {
     const frame = JSON.stringify({
       type: "alert",
       text: renderAlertBanner(records),
+      // Phase 6: the map upserts these points without clearing existing ones.
+      mapData: rowsToGeoJSON(records),
     });
 
     for (const ws of this.ctx.getWebSockets()) {

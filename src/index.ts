@@ -55,6 +55,13 @@ export default {
       return handleIngest(request, env);
     }
 
+    // Phase 6: hand the browser the Protomaps basemap key (a publishable,
+    // domain-restrictable key — safe to expose to the client). Empty string
+    // when unset; the map then falls back to a plain dark canvas.
+    if (url.pathname === "/api/config") {
+      return Response.json({ protomapsKey: env.PROTOMAPS_KEY ?? "" });
+    }
+
     // WebSocket terminal: route to the single global TerminalHub instance.
     if (url.pathname === "/ws") {
       if (request.headers.get("Upgrade") !== "websocket") {

@@ -14,8 +14,8 @@ Durable Objects, and Cron Triggers.
 
 ## Status
 
-Built as a series of independently verifiable phases. **Phases 1–5 are
-complete**; later phases are not built yet.
+Built as a series of independently verifiable phases. **Phases 1–6 are
+complete**; the last phase is not built yet.
 
 | Phase | Scope | State |
 | ----- | ----- | ----- |
@@ -24,7 +24,7 @@ complete**; later phases are not built yet.
 | 3 | Terminal backend (Durable Object + WebSockets) | ✅ Done |
 | 4 | Terminal frontend (xterm.js) | ✅ Done |
 | 5 | Real-time alerts | ✅ Done |
-| 6 | Map panel (Protomaps + MapLibre) | ⬜ Planned |
+| 6 | Map panel (Protomaps + MapLibre) | ✅ Done |
 | 7 | Export + polish | ⬜ Planned |
 
 ## Architecture (current)
@@ -42,27 +42,36 @@ as a `{"type":"alert"}` banner — no page refresh needed (Phase 5). The
 `TerminalHub` uses the WebSocket Hibernation API, so idle tabs cost nothing yet
 still receive the fan-out.
 
+`list` / `search` results (and alerts) also carry a GeoJSON `mapData` payload
+that a MapLibre GL JS panel plots beside the terminal as circles sized/coloured
+by magnitude (Phase 6). The basemap is Protomaps' hosted dark vector style when
+a `PROTOMAPS_KEY` is configured; without one it degrades to a plain dark canvas
+so points still render.
+
 Each record's primary key is a truncated SHA-256 of `utcdatetime|lat|lon`. The
 upstream feed has no id field, so hashing its natural key makes ingestion
 idempotent: re-fetching the same feed inserts zero new rows.
 
-- `src/index.ts` — Worker entry; bearer-guarded `POST /admin/ingest`, `/ws` → Durable Object, else static assets.
+- `src/index.ts` — Worker entry; bearer-guarded `POST /admin/ingest`, `GET /api/config` (Protomaps key), `/ws` → Durable Object, else static assets.
 - `src/lib/ingest.ts` — fetch, `computeId`, batched upsert; returns the actual newly-inserted rows for alert fan-out.
-- `src/durable-objects/terminal-hub.ts` — `TerminalHub` DO: WebSocket Hibernation session hub; `broadcastNewEarthquakes()` RPC fans alerts out to every socket.
-- `src/lib/commands.ts` — `executeCommand()`: parses `help` / `list` / `search` and runs parameterized D1 queries.
+- `src/durable-objects/terminal-hub.ts` — `TerminalHub` DO: WebSocket Hibernation session hub; `broadcastNewEarthquakes()` RPC fans alerts (with `mapData`) out to every socket.
+- `src/lib/commands.ts` — `executeCommand()`: parses `help` / `list` / `search`, runs parameterized D1 queries, and returns `{text, mapData}`.
 - `src/lib/format.ts` — ANSI colour + fixed-width table/detail renderers (magnitude colour-coded by severity) + `renderAlertBanner()`.
+- `src/lib/geojson.ts` — `rowsToGeoJSON()`: converts D1 rows into the map panel's Point FeatureCollection.
 - `src/types.ts` — `Env` + API/row types.
 - `migrations/0001_init.sql` — `earthquakes` table (structured fields only, no raw JSON).
-- `public/index.html` — xterm.js terminal + map-panel shell; loads xterm via CDN (no build step).
-- `public/app.js` — terminal client: opens `/ws`, hand-rolls the prompt/line editor (Enter, backspace, cursor keys, ↑/↓ history, Ctrl+A/E/U/L/C), writes ANSI replies to xterm, renders pushed `alert` banners without disturbing the current line, auto-reconnects.
-- `public/styles.css` — full-viewport terminal/map split layout with a connection-status indicator.
+- `public/index.html` — xterm.js terminal + MapLibre map shell; loads xterm, MapLibre GL JS, and the Protomaps basemaps helper via CDN (no build step).
+- `public/app.js` — terminal client: opens `/ws`, hand-rolls the prompt/line editor (Enter, backspace, cursor keys, ↑/↓ history, Ctrl+A/E/U/L/C), writes ANSI replies to xterm, renders pushed `alert` banners without disturbing the current line, forwards `mapData` to the map, auto-reconnects.
+- `public/map.js` — MapLibre GL JS map; exposes `window.EarthquakeMap.setFeatures()` / `.addFeatures()`, plots magnitude-scaled circles, and picks a Protomaps or dark-canvas basemap from `/api/config`.
+- `public/styles.css` — full-viewport terminal/map split layout with a connection-status indicator and dark-themed map chrome.
 
 ### Terminal commands (over `/ws`)
 
 The WebSocket speaks JSON: send `{"type":"input","line":"<command>"}`, receive
-`{"type":"output","text":"...ANSI..."}` (or `welcome` / `error`). Server-pushed
-`{"type":"alert","text":"...ANSI..."}` frames arrive unsolicited when a cron
-ingest finds new earthquakes.
+`{"type":"output","text":"...ANSI...","mapData":{...GeoJSON}}` (or `welcome` /
+`error`). Server-pushed `{"type":"alert","text":"...","mapData":{...}}` frames
+arrive unsolicited when a cron ingest finds new earthquakes. `mapData` is a
+Point FeatureCollection the browser plots on the map panel.
 
 | Command | Purpose |
 | ------- | ------- |
@@ -90,8 +99,25 @@ npm run dev
 
 Then open **http://localhost:8787** for the terminal UI: type `help`, `list --mag>5`,
 or `search <location>` at the prompt. Backspace, cursor keys, and ↑/↓ command
-history work; magnitude values are colour-coded by severity. (The map panel to the
-right is a placeholder until Phase 6.)
+history work; magnitude values are colour-coded by severity. The map panel to the
+right plots the current result set — run `list --mag>6` to see the matching
+circles appear, or `search <location>` to re-centre it.
+
+### Map basemap (optional)
+
+The map renders on a plain dark canvas out of the box. To get a real vector
+basemap, grab a free key from [protomaps.com](https://protomaps.com/dashboard)
+and expose it to the browser via `GET /api/config`:
+
+```bash
+# local dev — add to .dev.vars
+echo 'PROTOMAPS_KEY="<your-key>"' >> .dev.vars
+# production — set the var in wrangler.jsonc, or:
+npx wrangler secret put PROTOMAPS_KEY
+```
+
+The key is a publishable, domain-restrictable basemap token (it ends up in tile
+URLs the browser fetches), not a server secret.
 
 Trigger an ingestion run and inspect the result:
 

@@ -142,6 +142,8 @@ function handleServerMessage(msg) {
 		case "output":
 		case "error":
 			term.write("\r\n" + msg.text + "\r\n\r\n");
+			// Phase 6: row-returning commands carry a GeoJSON set; replot the map.
+			if (msg.mapData) window.EarthquakeMap?.setFeatures(msg.mapData);
 			busy = false;
 			newPrompt();
 			break;
@@ -152,6 +154,8 @@ function handleServerMessage(msg) {
 			// in flight (busy) its own reply will redraw the prompt, so we skip
 			// the restore to avoid a stray prompt above the pending output.
 			term.write("\r\n" + msg.text + "\r\n\r\n");
+			// Phase 6: upsert the new quakes onto the map without clearing it.
+			if (msg.mapData) window.EarthquakeMap?.addFeatures(msg.mapData);
 			if (!busy && greeted) render();
 			break;
 		default:
