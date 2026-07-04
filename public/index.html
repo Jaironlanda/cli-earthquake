@@ -3,10 +3,45 @@
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>Hello, World!</title>
+		<title>Earthquake CLI</title>
+		<meta
+			name="description"
+			content="A web-based terminal over live earthquake data."
+		/>
+
+		<!--
+			xterm.js is loaded from a CDN to match this project's no-build-step
+			convention (static assets in public/, no bundler). The global builds
+			expose window.Terminal and window.FitAddon.
+		-->
+		<link
+			rel="stylesheet"
+			href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css"
+		/>
+		<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+		<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+
+		<link rel="stylesheet" href="/styles.css" />
 	</head>
 	<body>
-		<h1 id="heading">Hello, World!</h1>
-		<p>This page comes from a static asset stored at `public/index.html` as configured in `wrangler.jsonc`.</p>
+		<div id="app">
+			<header id="titlebar">
+				<span class="brand">🌏 Earthquake CLI</span>
+				<span id="status" class="status status--connecting">
+					<span class="status__dot"></span>
+					<span class="status__label">connecting…</span>
+				</span>
+			</header>
+			<main id="split">
+				<!-- xterm.js mounts here -->
+				<section id="terminal" aria-label="Terminal"></section>
+				<!-- Map panel is filled in Phase 6. -->
+				<section id="map" aria-label="Map">
+					<div class="map-placeholder">Map panel — coming in a later phase</div>
+				</section>
+			</main>
+		</div>
+
+		<script type="module" src="/app.js"></script>
 	</body>
 </html>

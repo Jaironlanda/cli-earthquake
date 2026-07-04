@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-"Earthquake CLI": a web-based terminal (planned xterm.js frontend) over live
+"Earthquake CLI": a web-based terminal (xterm.js frontend) over live
 earthquake data from `api.data.gov.my`, built on Cloudflare Workers. The full,
 phased build is described in `planning/implementation-plan.md`; `planning/project-draft.md`
 holds the original spec. Work proceeds one phase at a time, each on its own branch.
 
-**Phases 1 (data layer), 2 (cron automation), and 3 (terminal backend) are done**
-— the rest of the plan (xterm.js frontend, real-time alerts, Protomaps map, export)
-is not built yet.
+**Phases 1 (data layer), 2 (cron automation), 3 (terminal backend), and 4
+(xterm.js terminal frontend) are done** — the rest of the plan (real-time alerts,
+Protomaps map, export) is not built yet.
 
 Current code:
 
@@ -40,7 +40,18 @@ Current code:
 - `migrations/0001_init.sql` — `earthquakes` table, indexed on `utcdatetime`,
   `magdefault`, `location`. Stores only structured fields (no raw-JSON blob) to keep
   the indefinitely-growing table small.
-- `public/index.html` — still the default scaffold page (replaced in Phase 4).
+- `public/index.html` — xterm.js terminal + map-panel shell. Loads `@xterm/xterm`
+  and `@xterm/addon-fit` from a CDN via `<script>` tags (no build step, matching the
+  static-asset convention); loads `public/app.js` as a module and `public/styles.css`.
+- `public/app.js` — terminal client. Creates a `Terminal` + `FitAddon`, opens the
+  `/ws` WebSocket, and **hand-rolls the prompt/line editor** via `term.onData()`
+  (xterm.js has no built-in shell): buffered line with insert-at-cursor, Enter,
+  backspace, ←/→, ↑/↓ history (with draft stash), Home/End, Ctrl+A/E/U/L/C. Sends
+  `{type:"input",line}`; on `welcome`/`output`/`error` writes the ANSI text back
+  (unknown types like Phase 5 `alert` are ignored). A `busy` flag gates input while
+  a command is in flight; auto-reconnects with backoff (welcome only greets once).
+- `public/styles.css` — full-viewport flex split (terminal | map placeholder) plus
+  a title-bar connection-status indicator; stacks vertically under 800px.
 
 Bindings in `wrangler.jsonc`: `ASSETS` (static assets,
 `run_worker_first: ["/admin/*", "/ws"]`), `DB` (D1 database `earthquake-db`), and
