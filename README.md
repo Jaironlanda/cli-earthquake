@@ -14,7 +14,7 @@ Durable Objects, and Cron Triggers.
 
 ## Status
 
-Built as a series of independently verifiable phases. **Phases 1–4 are
+Built as a series of independently verifiable phases. **Phases 1–5 are
 complete**; later phases are not built yet.
 
 | Phase | Scope | State |
@@ -23,7 +23,7 @@ complete**; later phases are not built yet.
 | 2 | Cron automation (15-min ingestion) | ✅ Done |
 | 3 | Terminal backend (Durable Object + WebSockets) | ✅ Done |
 | 4 | Terminal frontend (xterm.js) | ✅ Done |
-| 5 | Real-time alerts | ⬜ Planned |
+| 5 | Real-time alerts | ✅ Done |
 | 6 | Map panel (Protomaps + MapLibre) | ⬜ Planned |
 | 7 | Export + polish | ⬜ Planned |
 
@@ -31,31 +31,38 @@ complete**; later phases are not built yet.
 
 ```
 api.data.gov.my ─fetch─▶ Worker (src/index.ts) ─INSERT OR IGNORE─▶ D1 (earthquakes)
-                         POST /admin/ingest + */15 cron                    │
-                                                                           │ query
-   xterm.js  ◀─WebSocket──▶ TerminalHub (Durable Object) ──────────────────┘
-   (public/)     /ws          parse command → format ANSI reply
+                         POST /admin/ingest + */15 cron            │        │
+                              new rows ─broadcast RPC─▶            │        │ query
+   xterm.js  ◀─WebSocket──▶ TerminalHub (Durable Object) ◀─────────┘────────┘
+   (public/)     /ws     parse command → ANSI reply · push {type:"alert"} to all tabs
 ```
+
+After each cron ingest, any genuinely-new rows are pushed to every open terminal
+as a `{"type":"alert"}` banner — no page refresh needed (Phase 5). The
+`TerminalHub` uses the WebSocket Hibernation API, so idle tabs cost nothing yet
+still receive the fan-out.
 
 Each record's primary key is a truncated SHA-256 of `utcdatetime|lat|lon`. The
 upstream feed has no id field, so hashing its natural key makes ingestion
 idempotent: re-fetching the same feed inserts zero new rows.
 
 - `src/index.ts` — Worker entry; bearer-guarded `POST /admin/ingest`, `/ws` → Durable Object, else static assets.
-- `src/lib/ingest.ts` — fetch, `computeId`, batched upsert.
-- `src/durable-objects/terminal-hub.ts` — `TerminalHub` DO: WebSocket Hibernation session hub for the terminal.
+- `src/lib/ingest.ts` — fetch, `computeId`, batched upsert; returns the actual newly-inserted rows for alert fan-out.
+- `src/durable-objects/terminal-hub.ts` — `TerminalHub` DO: WebSocket Hibernation session hub; `broadcastNewEarthquakes()` RPC fans alerts out to every socket.
 - `src/lib/commands.ts` — `executeCommand()`: parses `help` / `list` / `search` and runs parameterized D1 queries.
-- `src/lib/format.ts` — ANSI colour + fixed-width table/detail renderers (magnitude colour-coded by severity).
+- `src/lib/format.ts` — ANSI colour + fixed-width table/detail renderers (magnitude colour-coded by severity) + `renderAlertBanner()`.
 - `src/types.ts` — `Env` + API/row types.
 - `migrations/0001_init.sql` — `earthquakes` table (structured fields only, no raw JSON).
 - `public/index.html` — xterm.js terminal + map-panel shell; loads xterm via CDN (no build step).
-- `public/app.js` — terminal client: opens `/ws`, hand-rolls the prompt/line editor (Enter, backspace, cursor keys, ↑/↓ history, Ctrl+A/E/U/L/C), writes ANSI replies to xterm, auto-reconnects.
+- `public/app.js` — terminal client: opens `/ws`, hand-rolls the prompt/line editor (Enter, backspace, cursor keys, ↑/↓ history, Ctrl+A/E/U/L/C), writes ANSI replies to xterm, renders pushed `alert` banners without disturbing the current line, auto-reconnects.
 - `public/styles.css` — full-viewport terminal/map split layout with a connection-status indicator.
 
 ### Terminal commands (over `/ws`)
 
 The WebSocket speaks JSON: send `{"type":"input","line":"<command>"}`, receive
-`{"type":"output","text":"...ANSI..."}` (or `welcome` / `error`).
+`{"type":"output","text":"...ANSI..."}` (or `welcome` / `error`). Server-pushed
+`{"type":"alert","text":"...ANSI..."}` frames arrive unsolicited when a cron
+ingest finds new earthquakes.
 
 | Command | Purpose |
 | ------- | ------- |
@@ -107,6 +114,13 @@ ws.onmessage = (e) => { console.log(JSON.parse(e.data).text); ws.close(); };
 ws.onopen = () => ws.send(JSON.stringify({ type: "input", line: "list --mag>6" }));
 '
 ```
+
+Verify real-time alerts (Phase 5): run `wrangler dev --test-scheduled`, clear the
+local table (`... --command "DELETE FROM earthquakes"`) so a scheduled ingest
+treats every fetched record as new, open a WS client, then trigger the cron with
+`curl "localhost:8787/__scheduled?cron=*/15+*+*+*+*"` — the socket receives an
+unsolicited `{"type":"alert"}` banner. Re-triggering inserts nothing and sends no
+alert.
 
 ## Deployment
 

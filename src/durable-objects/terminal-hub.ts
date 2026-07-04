@@ -16,9 +16,9 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
-import type { Env } from "../types";
+import type { Env, EarthquakeRow } from "../types";
 import { executeCommand } from "../lib/commands";
-import { bold, color, dim, EOL } from "../lib/format";
+import { bold, color, dim, EOL, renderAlertBanner } from "../lib/format";
 
 /** Shape of an inbound client message. */
 interface InputMessage {
@@ -110,6 +110,31 @@ export class TerminalHub extends DurableObject<Env> {
           text: color("Internal error running command.", "red"),
         }),
       );
+    }
+  }
+
+  /**
+   * Broadcast newly-ingested earthquakes to every connected terminal
+   * (Phase 5). Called as an RPC by the Worker's `scheduled()` handler after a
+   * cron ingest finds unseen records. We render the banner once and fan it out
+   * over every live socket — including sockets whose DO was hibernating, which
+   * `getWebSockets()` still returns. Send failures on individual sockets are
+   * swallowed so one dead connection can't abort the broadcast.
+   */
+  broadcastNewEarthquakes(records: EarthquakeRow[]): void {
+    if (records.length === 0) return;
+
+    const frame = JSON.stringify({
+      type: "alert",
+      text: renderAlertBanner(records),
+    });
+
+    for (const ws of this.ctx.getWebSockets()) {
+      try {
+        ws.send(frame);
+      } catch (error) {
+        console.error("Alert broadcast to a socket failed:", error);
+      }
     }
   }
 

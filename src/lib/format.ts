@@ -117,6 +117,41 @@ export function renderEarthquakeTable(rows: EarthquakeRow[]): string {
   return [headerLine, ...lines, "", footer].join(EOL);
 }
 
+/** Cap on how many rows a single alert banner enumerates before summarising. */
+const ALERT_MAX_ROWS = 10;
+
+/**
+ * Render a real-time alert banner announcing newly-ingested earthquakes
+ * (Phase 5). Broadcast to every open terminal by the TerminalHub when the cron
+ * ingest finds unseen records. The most significant events (highest magnitude)
+ * are shown first, capped at {@link ALERT_MAX_ROWS}, with a count of the rest.
+ */
+export function renderAlertBanner(rows: EarthquakeRow[]): string {
+  if (rows.length === 0) return "";
+
+  const sorted = [...rows].sort(
+    (a, b) => (b.magdefault ?? -Infinity) - (a.magdefault ?? -Infinity),
+  );
+  const shown = sorted.slice(0, ALERT_MAX_ROWS);
+
+  const heading =
+    bold(color("⚡ ALERT", "brightRed")) +
+    " " +
+    bold(
+      `${rows.length} new earthquake${rows.length === 1 ? "" : "s"} detected`,
+    );
+
+  const body = renderEarthquakeTable(shown);
+
+  const lines = [heading, "", body];
+  const hidden = rows.length - shown.length;
+  if (hidden > 0) {
+    lines.push(dim(`…and ${hidden} more. Run "list" to see the full feed.`));
+  }
+
+  return lines.join(EOL);
+}
+
 /** Render a single earthquake as a detailed key/value block (for `search <id>`). */
 export function renderEarthquakeDetail(row: EarthquakeRow): string {
   const field = (label: string, value: string) =>

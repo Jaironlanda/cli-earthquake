@@ -86,6 +86,13 @@ export default {
       console.log(
         `Scheduled ingest (${controller.cron}): fetched ${result.fetched}, inserted ${result.inserted}`,
       );
+
+      // Phase 5: push genuinely-new records to every open terminal via the DO.
+      // Direct RPC on the stub (not .fetch()) — no HTTP round-trip needed.
+      if (result.insertedRows.length > 0) {
+        const stub = env.TERMINAL_HUB.getByName(TERMINAL_HUB_NAME);
+        await stub.broadcastNewEarthquakes(result.insertedRows);
+      }
     } catch (error) {
       console.error("Scheduled ingestion failed:", error);
       throw error;
