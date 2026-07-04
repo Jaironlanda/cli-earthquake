@@ -35,11 +35,12 @@ the `scheduled()` handler.
 ## Commands
 
 - `npm run dev` / `npm start` — run locally via `wrangler dev`
+- `npm run typecheck` — type-check with `tsc --noEmit` (config in `tsconfig.json`)
 - `npm run deploy` — deploy via `wrangler deploy`
 - `npx wrangler types` — regenerate TypeScript types; **run this after changing any bindings in `wrangler.jsonc`**
 - `npx wrangler d1 migrations apply earthquake-db --local` (or `--remote`) — apply D1 migrations
 
-There is no lint, test, or build script configured yet.
+There is no lint or test script configured yet.
 
 ## Local setup
 
