@@ -9,15 +9,16 @@ earthquake data from `api.data.gov.my`, built on Cloudflare Workers. The full,
 phased build is described in `planning/implementation-plan.md`; `planning/project-draft.md`
 holds the original spec. Work proceeds one phase at a time, each on its own branch.
 
-**Phase 1 (data layer) is done** — the rest of the plan (cron, Durable Object
-terminal backend, xterm.js frontend, real-time alerts, Protomaps map, export)
-is not built yet.
+**Phases 1 (data layer) and 2 (cron automation) are done** — the rest of the plan
+(Durable Object terminal backend, xterm.js frontend, real-time alerts, Protomaps
+map, export) is not built yet.
 
 Current code:
 
-- `src/index.ts` — Worker entry (`fetch`). Routes `POST /admin/ingest` (bearer-guarded
-  by `ADMIN_TOKEN`) through the ingestion pipeline; everything else falls through to
-  `env.ASSETS.fetch(request)` (static assets in `public/`).
+- `src/index.ts` — Worker entry (`fetch` + `scheduled`). Routes `POST /admin/ingest`
+  (bearer-guarded by `ADMIN_TOKEN`) through the ingestion pipeline; everything else
+  falls through to `env.ASSETS.fetch(request)` (static assets in `public/`). The
+  `scheduled()` cron handler runs the same idempotent pipeline every 15 minutes.
 - `src/lib/ingest.ts` — `computeId()` (truncated SHA-256 of `utcdatetime|lat|lon`,
   giving each record a stable id since the API has none), `fetchLatestEarthquakes()`,
   `upsertEarthquakes()` (batched `INSERT OR IGNORE` → idempotent ingestion).
@@ -28,16 +29,18 @@ Current code:
 - `public/index.html` — still the default scaffold page (replaced in Phase 4).
 
 Bindings in `wrangler.jsonc`: `ASSETS` (static assets, `run_worker_first: ["/admin/*"]`)
-and `DB` (D1 database `earthquake-db`).
+and `DB` (D1 database `earthquake-db`); `triggers.crons: ["*/15 * * * *"]` drives
+the `scheduled()` handler.
 
 ## Commands
 
 - `npm run dev` / `npm start` — run locally via `wrangler dev`
+- `npm run typecheck` — type-check with `tsc --noEmit` (config in `tsconfig.json`)
 - `npm run deploy` — deploy via `wrangler deploy`
 - `npx wrangler types` — regenerate TypeScript types; **run this after changing any bindings in `wrangler.jsonc`**
 - `npx wrangler d1 migrations apply earthquake-db --local` (or `--remote`) — apply D1 migrations
 
-There is no lint, test, or build script configured yet.
+There is no lint or test script configured yet.
 
 ## Local setup
 

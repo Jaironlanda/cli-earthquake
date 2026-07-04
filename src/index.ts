@@ -3,8 +3,8 @@
  *
  * Phase 1: a single admin route (`POST /admin/ingest`) drives the ingestion
  * pipeline; everything else falls through to the static assets in public/.
- * Later phases add `scheduled()` (cron), WebSocket terminal routing, and API
- * endpoints.
+ * Phase 2: a `scheduled()` cron handler runs the same pipeline every 15 minutes.
+ * Later phases add WebSocket terminal routing and API endpoints.
  */
 
 import type { Env } from "./types";
@@ -49,5 +49,27 @@ export default {
 
     // Everything else: serve static assets from public/.
     return env.ASSETS.fetch(request);
+  },
+
+  /**
+   * Cron handler (see `triggers.crons` in wrangler.jsonc): runs the ingestion
+   * pipeline on a schedule. Ingestion is idempotent (dedupe by primary key), so
+   * repeated runs never duplicate rows. Errors are re-thrown so Cloudflare marks
+   * the invocation as failed and surfaces it in `wrangler tail` / observability.
+   */
+  async scheduled(
+    controller: ScheduledController,
+    env: Env,
+    _ctx: ExecutionContext,
+  ): Promise<void> {
+    try {
+      const result = await ingest(env.DB);
+      console.log(
+        `Scheduled ingest (${controller.cron}): fetched ${result.fetched}, inserted ${result.inserted}`,
+      );
+    } catch (error) {
+      console.error("Scheduled ingestion failed:", error);
+      throw error;
+    }
   },
 } satisfies ExportedHandler<Env>;
