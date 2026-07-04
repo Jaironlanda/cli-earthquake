@@ -15,6 +15,13 @@ backend), 4 (xterm.js terminal frontend), 5 (real-time alerts), 6
 chart + registry-driven help). The build in `planning/implementation-plan.md`
 is complete.
 
+**Phase 8 (post-plan, "fun & useful" commands)** extended the same registry with
+`stats`, `sparkline`, `top`, `nearby <lat> <lon>`, `minimap`, `compare A B`,
+`richter <mag>`, `felt <id>`, `random`, and `banner`, plus per-terminal alert
+filtering: `watch [--mag>N] [--location STR]` / `unwatch` store a filter on the
+WebSocket (`serializeAttachment`, survives hibernation) so alerts fan out only to
+matching sockets, and significant alerts (≥ mag 5) ring the terminal bell (`\x07`).
+
 Current code:
 
 - `src/index.ts` — Worker entry (`fetch` + `scheduled`). Routes `POST /admin/ingest`
@@ -35,23 +42,36 @@ Current code:
   `webSocketMessage()` parses `{type:"input",line}`, calls `executeCommand()`, and
   replies `{type:"output",text,mapData}` — or, when the result carries a `download`
   (Phase 7 `export`), `{type:"download",filename,mime,content,text}` — plus `welcome`
-  / `error`. `broadcastNewEarthquakes()` is an RPC method (called by `scheduled()`,
-  not over `.fetch()`) that renders one alert banner and `ws.send`s
-  `{type:"alert",text,mapData}` to every `ctx.getWebSockets()`.
+  / `error`. A `CommandResult.watch` directive (Phase 8) is stored on the socket via
+  `ws.serializeAttachment()` (filter object) / cleared with `null`.
+  `broadcastNewEarthquakes()` is an RPC method (called by `scheduled()`, not over
+  `.fetch()`) that fans an alert to every `ctx.getWebSockets()`; per socket it reads
+  the stored `watch` filter (`deserializeAttachment()`), skips or narrows the record
+  set to matches, and sends `{type:"alert",text,mapData,bell}` (`bell` set when peak
+  magnitude ≥ 5, Phase 8).
 - `src/lib/commands.ts` — `executeCommand(line, env)`: quote-aware tokenizer + a
   shared arg parser (`parseArgs`/`buildWhere`), driven by a single **command
   registry** (`COMMANDS`) that also renders `help` (so help can't drift from the
   parser). Parses `help`, `list`, `search <id|text>`,
   `export csv|json [filters]` (Phase 7 — returns a `download` payload, capped at
   `MAX_EXPORT` = 10k rows), and `trend [--by day|month] [filters]` (Phase 7 —
-  `GROUP BY strftime(...)` → ASCII chart). Runs **parameterized** D1 queries;
-  returns a `CommandResult` (`{text, mapData?, download?}`). User-facing problems
-  return a friendly error string; unexpected errors are re-thrown.
+  `GROUP BY strftime(...)` → ASCII chart). Phase 8 added `stats`/`sparkline`/`top`/
+  `nearby`/`minimap`/`compare`/`richter`/`felt`/`random`/`banner` (all through the
+  same `parseArgs`/`buildWhere` machinery; `nearby` bounding-boxes in SQL then
+  refines with a JS haversine) plus `watch`/`unwatch`, which return a
+  `CommandResult.watch` directive; `matchesWatch(row, filter)` (exported, unit-tested)
+  is the shared filter predicate the DO reuses at broadcast time. Runs
+  **parameterized** D1 queries; returns a `CommandResult`
+  (`{text, mapData?, download?, watch?}`). User-facing problems return a friendly
+  error string; unexpected errors are re-thrown.
 - `src/lib/format.ts` — ANSI helpers, magnitude→colour severity mapping, and
   fixed-width table + detail renderers. Uses `\r\n` line endings for xterm.js.
   `renderAlertBanner()` formats the Phase 5 push (top-magnitude rows first, capped
   at 10 with a "…and N more" summary). `renderTrend()` draws the Phase 7 bar chart
-  (bars scaled to the busiest bucket, coloured by peak magnitude).
+  (bars scaled to the busiest bucket, coloured by peak magnitude). Phase 8 renderers:
+  `renderStats`, `renderNearbyTable`, `renderRichter` (severity band + TNT-energy
+  readout), `renderSparkline` (Unicode `▁▂▃▅▇` ramp), `renderMinimap` (ASCII lat/lon
+  grid auto-fit to the data bounds), and `renderCompare`.
 - `src/lib/export.ts` — `rowsToCSV()` (RFC-4180 quoting) / `rowsToJSON()` (Phase 7):
   serialize `EarthquakeRow[]` into downloadable file content. Runtime-agnostic.
 - `src/lib/geojson.ts` — `rowsToGeoJSON()` (Phase 6): converts `EarthquakeRow[]`

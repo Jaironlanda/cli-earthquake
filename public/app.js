@@ -162,7 +162,8 @@ function handleServerMessage(msg) {
 			// the prompt + whatever the user had half-typed. While a command is
 			// in flight (busy) its own reply will redraw the prompt, so we skip
 			// the restore to avoid a stray prompt above the pending output.
-			term.write("\r\n" + msg.text + "\r\n\r\n");
+			// Phase 8: significant quakes set `bell` — ring the terminal bell.
+			term.write("\r\n" + (msg.bell ? "\x07" : "") + msg.text + "\r\n\r\n");
 			// Phase 6: upsert the new quakes onto the map without clearing it.
 			if (msg.mapData) window.EarthquakeMap?.addFeatures(msg.mapData);
 			if (!busy && greeted) render();
