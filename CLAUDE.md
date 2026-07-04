@@ -105,8 +105,13 @@ publishable basemap key served to the browser via `/api/config`);
 - `npm run deploy` — deploy via `wrangler deploy`
 - `npx wrangler types` — regenerate TypeScript types; **run this after changing any bindings in `wrangler.jsonc`**
 - `npx wrangler d1 migrations apply earthquake-db --local` (or `--remote`) — apply D1 migrations
+- `npm test` / `npm run test:run` — run the Vitest suite in watch / single-run mode
 
-There is no lint or test script configured yet.
+Tests use `@cloudflare/vitest-pool-workers` (config in `vitest.config.mts`), so
+they run inside the Workers runtime with the real `DB`/`TERMINAL_HUB` bindings.
+The suite lives in `test/` (`api`, `commands`, `ingest`); `test/apply-migrations.ts`
+applies the D1 schema before each file, and `docs/API.md` documents the API
+surface under test. There is no lint script configured yet.
 
 ## Local setup
 

@@ -66,6 +66,9 @@ idempotent: re-fetching the same feed inserts zero new rows.
 - `public/map.js` — MapLibre GL JS map; exposes `window.EarthquakeMap.setFeatures()` / `.addFeatures()`, plots magnitude-scaled circles, and picks a Protomaps or dark-canvas basemap from `/api/config`.
 - `public/styles.css` — full-viewport terminal/map split layout with a connection-status indicator and dark-themed map chrome.
 
+> **API reference:** the HTTP routes, the `/ws` frame protocol, the full command
+> reference, and the data model are documented in [`docs/API.md`](docs/API.md).
+
 ### Terminal commands (over `/ws`)
 
 The WebSocket speaks JSON: send `{"type":"input","line":"<command>"}`, receive
@@ -153,6 +156,24 @@ treats every fetched record as new, open a WS client, then trigger the cron with
 unsolicited `{"type":"alert"}` banner. Re-triggering inserts nothing and sends no
 alert.
 
+## Testing
+
+Tests run inside the Workers runtime via
+[`@cloudflare/vitest-pool-workers`](https://developers.cloudflare.com/workers/testing/vitest-integration/),
+with the real `DB` (D1) and `TERMINAL_HUB` (Durable Object) bindings — no
+platform mocking. The suite in [`test/`](test) covers HTTP routing, the `/ws`
+terminal round-trip, the command layer, and the ingest pipeline.
+
+```bash
+npm test          # watch mode
+npm run test:run  # single run (CI)
+```
+
+The `POST /admin/ingest` success path hits the live upstream feed over the
+network, so it's exercised manually (above) rather than in the hermetic suite;
+the pipeline itself is unit-tested via `upsertEarthquakes` with fixtures. See
+[`docs/API.md`](docs/API.md#testing) for the full breakdown.
+
 ## Deployment
 
 ```bash
@@ -166,6 +187,7 @@ npm run deploy
 | Command | Purpose |
 | ------- | ------- |
 | `npm run dev` / `npm start` | Run locally via `wrangler dev` |
+| `npm test` / `npm run test:run` | Run the Vitest suite (watch / single run) |
 | `npm run deploy` | Deploy via `wrangler deploy` |
 | `npx wrangler types` | Regenerate TS types (run after editing bindings in `wrangler.jsonc`) |
 | `npx wrangler d1 migrations apply earthquake-db --local\|--remote` | Apply D1 migrations |
