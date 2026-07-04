@@ -2,9 +2,11 @@
  * Earthquake CLI — floating-terminal layout.
  *
  * The MapLibre map fills the whole viewport as a background layer; the xterm.js
- * terminal sits over it as a Linux-style window — bottom-center by default,
- * draggable by its titlebar, minimizable to a dock chip and maximizable to
- * (almost) full screen. The window background is translucent glass (rgba +
+ * terminal sits over it as a Linux-style window — centered by default,
+ * draggable by its titlebar, minimizable to a top-center dock chip and
+ * maximizable to (almost) full screen. Map-plotting commands fade it to a
+ * ghost (.ghost) instead of hiding it; clicking the map minimizes it.
+ * The window background is translucent glass (rgba +
  * backdrop blur) so the map stays visible through the terminal. A help modal
  * (#help-modal) walks non-technical visitors through the commands.
  */
@@ -60,8 +62,8 @@ body {
 .term-window {
 	position: fixed;
 	left: 50%;
-	bottom: 24px;
-	transform: translateX(-50%);
+	top: 50%;
+	transform: translate(-50%, -50%);
 	width: min(920px, 86vw);
 	height: min(500px, 58vh);
 	display: flex;
@@ -76,6 +78,18 @@ body {
 		0 0 0 1px rgba(0, 0, 0, 0.4);
 	overflow: hidden;
 	z-index: 10;
+	transition: opacity 0.25s ease;
+}
+
+/* Ghost mode: a map-plotting command faded the window (90% transparent) so the
+   plotted quakes are visible through it. Hovering previews it; clicking or
+   typing in it (JS removes the class) restores it fully. */
+.term-window.ghost {
+	opacity: 0.1;
+}
+
+.term-window.ghost:hover {
+	opacity: 1;
 }
 
 /* Maximized: pin to the viewport edges (JS clears any drag offsets first). */
@@ -225,8 +239,9 @@ body {
 
 .term-dock {
 	position: fixed;
-	left: 14px;
-	bottom: 14px;
+	left: 50%;
+	top: 14px;
+	transform: translateX(-50%);
 	z-index: 10;
 	display: none;
 	align-items: center;

@@ -105,10 +105,13 @@ Current code:
   with backoff (welcome only greets once). The terminal runs with
   `allowTransparency` + a transparent theme background (the translucent glass is
   CSS on `.term-window`), refits via a `ResizeObserver`, and a window-manager
-  block wires minimize (→ dock chip, which pulses if an alert arrives while
-  minimized), maximize/restore (button or titlebar double-click), and
-  titlebar-drag with viewport clamping. Commands whose reply carries map
-  features auto-minimize the window so the plot is visible. The help modal is
+  block wires minimize (→ top-center dock chip, which pulses if an alert
+  arrives while minimized), maximize/restore (button or titlebar double-click),
+  and titlebar-drag with viewport clamping. Commands whose reply carries map
+  features fade the window to a "ghost" (`.ghost`, 10% opacity; hover previews
+  it, clicking/typing in the terminal restores it, an incoming alert un-ghosts)
+  so the plot shows through; pointerdown on the map minimizes the window to the
+  dock chip. The help modal is
   wired to the `?` button, ×/Esc/backdrop close, and a `localStorage`
   first-visit flag (`eq-guide-seen`).
 - `public/map.js` — MapLibre GL JS map (Phase 6). Fetches `/api/config`; if a
@@ -119,10 +122,11 @@ Current code:
   and `.addFeatures(fc)` (upsert by id, for alerts); both queue until the map's
   `load` fires. Hover popups show magnitude/location/time.
 - `public/styles.css` — full-viewport map layer with the floating terminal
-  window on top, anchored bottom-center by default: translucent glass
+  window on top, centered in the viewport by default: translucent glass
   background (`rgba` + `backdrop-filter` blur) so the map shows through,
-  `.maximized` (pins to viewport edges) and `.minimized` (hidden; dock chip
-  visible) states, titlebar/window-button styling, the connection-status dot,
+  `.maximized` (pins to viewport edges), `.minimized` (hidden; top-center dock
+  chip visible), and `.ghost` (10% opacity, hover restores to full) states,
+  titlebar/window-button styling, the connection-status dot,
   the `#help-modal` guide card, dark-themed map chrome/popups, and a
   near-fullscreen window under 700px.
 
