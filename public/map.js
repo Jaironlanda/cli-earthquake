@@ -2,8 +2,9 @@
  * Earthquake CLI — map panel (Phase 6).
  *
  * A MapLibre GL JS map that plots the current command's result set as circles
- * sized and coloured by magnitude, sitting beside the xterm.js terminal. The
- * terminal client (public/app.js) drives it entirely through the small
+ * sized and coloured by magnitude, filling the viewport beneath the floating
+ * xterm.js terminal window. The terminal client (public/app.js) drives it
+ * entirely through the small
  * `window.EarthquakeMap` API exposed at the bottom of this file:
  *
  *   EarthquakeMap.setFeatures(geojson)  // replace the plotted set + refit view

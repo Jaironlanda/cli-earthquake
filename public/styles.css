@@ -1,9 +1,12 @@
 /*
- * Earthquake CLI — terminal frontend layout (Phase 4).
+ * Earthquake CLI — floating-terminal layout.
  *
- * A full-viewport split: an xterm.js terminal on the left, a map panel on the
- * right (the map itself lands in Phase 6; for now it's a placeholder). The
- * layout collapses to stacked panels on narrow screens.
+ * The MapLibre map fills the whole viewport as a background layer; the xterm.js
+ * terminal sits over it as a Linux-style window — bottom-center by default,
+ * draggable by its titlebar, minimizable to a dock chip and maximizable to
+ * (almost) full screen. The window background is translucent glass (rgba +
+ * backdrop blur) so the map stays visible through the terminal. A help modal
+ * (#help-modal) walks non-technical visitors through the commands.
  */
 
 :root {
@@ -16,6 +19,7 @@
 	--ok: #3fb950;
 	--warn: #d29922;
 	--err: #f85149;
+	--glass: rgba(11, 15, 20, 0.62);
 }
 
 * {
@@ -37,34 +41,133 @@ body {
 	overflow: hidden;
 }
 
-#app {
-	display: flex;
-	flex-direction: column;
-	height: 100vh;
+/* --- Full-screen map layer ------------------------------------------------ */
+
+#map {
+	position: fixed;
+	inset: 0;
+	background: var(--panel);
 }
 
-/* Title bar with connection status. */
-#titlebar {
+/* MapLibre injects its own canvas; fill the viewport. */
+#map .maplibregl-map {
+	position: absolute;
+	inset: 0;
+}
+
+/* --- Floating terminal window ---------------------------------------------- */
+
+.term-window {
+	position: fixed;
+	left: 50%;
+	bottom: 24px;
+	transform: translateX(-50%);
+	width: min(920px, 86vw);
+	height: min(500px, 58vh);
+	display: flex;
+	flex-direction: column;
+	background: var(--glass);
+	-webkit-backdrop-filter: blur(10px) saturate(130%);
+	backdrop-filter: blur(10px) saturate(130%);
+	border: 1px solid rgba(53, 193, 232, 0.25);
+	border-radius: 10px;
+	box-shadow:
+		0 24px 64px rgba(0, 0, 0, 0.55),
+		0 0 0 1px rgba(0, 0, 0, 0.4);
+	overflow: hidden;
+	z-index: 10;
+}
+
+/* Maximized: pin to the viewport edges (JS clears any drag offsets first). */
+.term-window.maximized {
+	left: 12px;
+	top: 12px;
+	right: 12px;
+	bottom: 12px;
+	width: auto;
+	height: auto;
+	transform: none;
+	border-radius: 8px;
+}
+
+/* Minimized: the window disappears; the dock chip stands in for it. */
+.term-window.minimized {
+	display: none;
+}
+
+/* --- Titlebar --------------------------------------------------------------- */
+
+.term-titlebar {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
-	padding: 0.5rem 0.9rem;
-	background: var(--panel);
+	gap: 0.75rem;
+	padding: 0.4rem 0.6rem;
+	background: linear-gradient(rgba(28, 38, 50, 0.9), rgba(14, 20, 27, 0.9));
 	border-bottom: 1px solid var(--border);
+	flex: 0 0 auto;
+	user-select: none;
+	-webkit-user-select: none;
+	touch-action: none;
+	cursor: grab;
+}
+
+.term-titlebar:active {
+	cursor: grabbing;
+}
+
+.term-window.maximized .term-titlebar {
+	cursor: default;
+}
+
+.term-titlebar__title {
+	flex: 1 1 auto;
+	min-width: 0;
+	text-align: center;
+	font-size: 0.8rem;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	color: var(--muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.term-titlebar__controls {
+	display: inline-flex;
+	gap: 0.35rem;
 	flex: 0 0 auto;
 }
 
-.brand {
-	font-weight: 600;
-	letter-spacing: 0.02em;
+.term-btn {
+	width: 1.45rem;
+	height: 1.45rem;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border: 1px solid var(--border);
+	border-radius: 50%;
+	background: rgba(255, 255, 255, 0.05);
+	color: var(--muted);
+	font: inherit;
+	font-size: 0.75rem;
+	line-height: 1;
+	padding: 0;
+	cursor: pointer;
 }
 
+.term-btn:hover {
+	background: rgba(255, 255, 255, 0.14);
+	color: var(--fg);
+}
+
+/* Connection status (left slot of the titlebar). */
 .status {
 	display: inline-flex;
 	align-items: center;
 	gap: 0.45rem;
-	font-size: 0.8rem;
+	font-size: 0.75rem;
 	color: var(--muted);
+	flex: 0 0 auto;
 }
 
 .status__dot {
@@ -97,43 +200,71 @@ body {
 	}
 }
 
-/* The terminal / map split. */
-#split {
-	display: flex;
-	flex: 1 1 auto;
-	min-height: 0;
-}
+/* --- Terminal body ----------------------------------------------------------- */
 
 #terminal {
-	flex: 1 1 60%;
-	min-width: 0;
-	padding: 0.5rem 0 0.5rem 0.5rem;
-	background: var(--bg);
+	flex: 1 1 auto;
+	min-height: 0;
+	padding: 0.4rem 0 0.4rem 0.6rem;
 	overflow: hidden;
 }
 
-/* xterm injects its own viewport; make sure it fills the panel. */
+/* xterm injects its own viewport; fill the window and keep it see-through
+   (the terminal theme background is transparent; the glass is on .term-window). */
 #terminal .xterm,
 #terminal .xterm-viewport,
 #terminal .xterm-screen {
 	height: 100% !important;
 }
 
-#map {
-	position: relative;
-	flex: 1 1 40%;
-	min-width: 0;
-	border-left: 1px solid var(--border);
-	background: var(--panel);
+#terminal .xterm-viewport {
+	background: transparent !important;
 }
 
-/* MapLibre injects its own canvas; fill the panel. */
-#map .maplibregl-map {
-	position: absolute;
-	inset: 0;
+/* --- Dock chip (minimized state) --------------------------------------------- */
+
+.term-dock {
+	position: fixed;
+	left: 14px;
+	bottom: 14px;
+	z-index: 10;
+	display: none;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.45rem 0.8rem;
+	background: var(--glass);
+	-webkit-backdrop-filter: blur(10px);
+	backdrop-filter: blur(10px);
+	border: 1px solid rgba(53, 193, 232, 0.35);
+	border-radius: 8px;
+	color: var(--fg);
+	font: inherit;
+	font-size: 0.8rem;
+	cursor: pointer;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
-/* Dark-theme the MapLibre chrome (controls, popups) to match the terminal. */
+.term-dock.visible {
+	display: inline-flex;
+}
+
+.term-dock:hover {
+	border-color: var(--accent);
+}
+
+.term-dock__icon {
+	color: var(--accent);
+	font-weight: 700;
+}
+
+/* An alert arrived while minimized: pulse until the terminal is restored. */
+.term-dock--alert {
+	border-color: var(--warn);
+	animation: pulse 1.1s ease-in-out infinite;
+}
+
+/* --- Map chrome (controls, popups) — dark-themed to match the terminal ------- */
+
 #map .maplibregl-ctrl-group {
 	background: var(--panel);
 	border: 1px solid var(--border);
@@ -174,19 +305,106 @@ body {
 	color: var(--muted);
 }
 
-/* Stack the panels on narrow screens. */
-@media (max-width: 800px) {
-	#split {
-		flex-direction: column;
-	}
+/* --- Help / guide modal -------------------------------------------------------- */
 
-	#terminal {
-		flex: 1 1 65%;
-	}
+.help-modal {
+	position: fixed;
+	inset: 0;
+	z-index: 50;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(4, 8, 12, 0.55);
+	-webkit-backdrop-filter: blur(4px);
+	backdrop-filter: blur(4px);
+}
 
-	#map {
-		flex: 1 1 35%;
-		border-left: none;
-		border-top: 1px solid var(--border);
+.help-modal[hidden] {
+	display: none;
+}
+
+.help-modal__card {
+	display: flex;
+	flex-direction: column;
+	width: min(620px, 92vw);
+	max-height: 84vh;
+	background: rgba(14, 20, 27, 0.96);
+	border: 1px solid rgba(53, 193, 232, 0.35);
+	border-radius: 12px;
+	box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+	overflow: hidden;
+}
+
+.help-modal__header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem;
+	padding: 0.75rem 1rem;
+	border-bottom: 1px solid var(--border);
+	background: linear-gradient(rgba(28, 38, 50, 0.9), rgba(14, 20, 27, 0.9));
+}
+
+.help-modal__header h2 {
+	margin: 0;
+	font-size: 0.95rem;
+	letter-spacing: 0.02em;
+}
+
+.help-modal__body {
+	padding: 0.9rem 1.1rem 1.1rem;
+	overflow-y: auto;
+	font-size: 0.84rem;
+	line-height: 1.55;
+}
+
+.help-modal__body h3 {
+	margin: 1.1rem 0 0.4rem;
+	font-size: 0.75rem;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--accent);
+}
+
+.help-modal__body h3:first-child {
+	margin-top: 0;
+}
+
+.help-modal__body p {
+	margin: 0.4rem 0;
+}
+
+.help-modal__body code {
+	background: rgba(53, 193, 232, 0.12);
+	color: var(--accent);
+	padding: 0.08rem 0.35rem;
+	border-radius: 4px;
+}
+
+.help-modal__body table {
+	width: 100%;
+	border-collapse: collapse;
+	margin: 0.3rem 0;
+}
+
+.help-modal__body td {
+	padding: 0.32rem 0.6rem 0.32rem 0;
+	border-bottom: 1px solid var(--border);
+	vertical-align: top;
+}
+
+.help-modal__body td:first-child {
+	white-space: nowrap;
+}
+
+.help-modal__body .muted {
+	color: var(--muted);
+}
+
+/* Small screens: the floating window takes (almost) the whole viewport. */
+@media (max-width: 700px) {
+	.term-window {
+		width: calc(100vw - 16px);
+		height: calc(100vh - 16px);
 	}
 }

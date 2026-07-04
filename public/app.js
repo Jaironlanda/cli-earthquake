@@ -18,8 +18,12 @@ const term = new Terminal({
 	fontFamily:
 		'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
 	fontSize: 14,
+	// The terminal floats over the full-screen map as a translucent window;
+	// its own background stays fully transparent so the glass effect (rgba +
+	// backdrop blur on .term-window) is what tints the map behind the text.
+	allowTransparency: true,
 	theme: {
-		background: "#0b0f14",
+		background: "rgba(0, 0, 0, 0)",
 		foreground: "#c8d3df",
 		cursor: "#35c1e8",
 		selectionBackground: "#24405299",
@@ -32,7 +36,9 @@ term.loadAddon(fitAddon);
 term.open(document.getElementById("terminal"));
 fitAddon.fit();
 
-// Refit on resize (and after the browser settles layout on load).
+// Refit on resize (and after the browser settles layout on load). The window
+// can also change size without a viewport resize (maximize/restore), so a
+// ResizeObserver on the terminal container catches those too.
 const refit = () => {
 	try {
 		fitAddon.fit();
@@ -41,6 +47,7 @@ const refit = () => {
 	}
 };
 window.addEventListener("resize", refit);
+new ResizeObserver(refit).observe(document.getElementById("terminal"));
 
 // --- Line-editing state ----------------------------------------------------
 
@@ -146,6 +153,9 @@ function handleServerMessage(msg) {
 			if (msg.mapData) window.EarthquakeMap?.setFeatures(msg.mapData);
 			busy = false;
 			newPrompt();
+			// Map-driven commands: get the window out of the way so the plotted
+			// result is visible; the dock chip restores it.
+			if (msg.mapData?.features?.length) minimize();
 			break;
 		case "download":
 			// Phase 7: `export` result. xterm.js has no file I/O, so we save the
@@ -167,6 +177,10 @@ function handleServerMessage(msg) {
 			// Phase 6: upsert the new quakes onto the map without clearing it.
 			if (msg.mapData) window.EarthquakeMap?.addFeatures(msg.mapData);
 			if (!busy && greeted) render();
+			// If the window is minimized the user can't see the banner; pulse the
+			// dock chip until they restore the terminal.
+			if (winEl.classList.contains("minimized"))
+				dockEl.classList.add("term-dock--alert");
 			break;
 		default:
 			// Unknown future message types are ignored.
@@ -333,6 +347,162 @@ term.onData((data) => {
 			return;
 	}
 });
+
+// --- Window manager ----------------------------------------------------------
+//
+// The terminal is a floating Linux-style window over the full-screen map:
+// draggable by its titlebar, minimizable to a dock chip, maximizable to the
+// viewport. All geometry is CSS; this block only toggles classes, moves the
+// window while dragging, and hands drag offsets back before maximizing (the
+// .maximized class pins to the viewport edges, so inline positions must go).
+
+const winEl = document.getElementById("term-window");
+const titlebarEl = document.getElementById("term-titlebar");
+const btnMin = document.getElementById("term-min");
+const btnMax = document.getElementById("term-max");
+const dockEl = document.getElementById("term-dock");
+
+/** Saved inline position (from dragging) so restore puts the window back. */
+let savedPosition = null;
+
+function isMaximized() {
+	return winEl.classList.contains("maximized");
+}
+
+function setMaximized(on) {
+	if (on) {
+		savedPosition = {
+			left: winEl.style.left,
+			top: winEl.style.top,
+			bottom: winEl.style.bottom,
+			transform: winEl.style.transform,
+		};
+		winEl.style.left = "";
+		winEl.style.top = "";
+		winEl.style.bottom = "";
+		winEl.style.transform = "";
+		winEl.classList.add("maximized");
+	} else {
+		winEl.classList.remove("maximized");
+		if (savedPosition) {
+			winEl.style.left = savedPosition.left;
+			winEl.style.top = savedPosition.top;
+			winEl.style.bottom = savedPosition.bottom;
+			winEl.style.transform = savedPosition.transform;
+		}
+	}
+	btnMax.textContent = on ? "❐" : "□";
+	btnMax.title = on ? "Restore" : "Maximize";
+	btnMax.setAttribute(
+		"aria-label",
+		on ? "Restore terminal" : "Maximize terminal",
+	);
+	term.focus();
+}
+
+function minimize() {
+	winEl.classList.add("minimized");
+	dockEl.classList.add("visible");
+}
+
+function restoreFromDock() {
+	winEl.classList.remove("minimized");
+	dockEl.classList.remove("visible", "term-dock--alert");
+	term.focus();
+}
+
+btnMax.addEventListener("click", () => setMaximized(!isMaximized()));
+btnMin.addEventListener("click", minimize);
+dockEl.addEventListener("click", restoreFromDock);
+
+// Double-click the titlebar (not its buttons) to toggle maximize, like most
+// Linux window managers.
+titlebarEl.addEventListener("dblclick", (e) => {
+	if (e.target.closest("button")) return;
+	setMaximized(!isMaximized());
+});
+
+// Drag by the titlebar. On drag start the window switches from the centered
+// transform to explicit left/top pixels (captured from its current rect), so
+// moving it is just updating those two values, clamped to the viewport.
+let drag = null;
+
+/** Position the window, keeping enough of the titlebar on-screen to grab. */
+function moveTo(x, y) {
+	winEl.style.left = `${Math.min(
+		Math.max(x, 120 - winEl.offsetWidth),
+		window.innerWidth - 120,
+	)}px`;
+	winEl.style.top = `${Math.min(Math.max(y, 0), window.innerHeight - 40)}px`;
+}
+
+// A dragged window could be stranded outside a shrinking viewport; re-clamp
+// whenever the browser resizes (centered/maximized windows need no help).
+window.addEventListener("resize", () => {
+	if (winEl.style.left && !isMaximized()) {
+		moveTo(parseFloat(winEl.style.left), parseFloat(winEl.style.top));
+	}
+});
+
+titlebarEl.addEventListener("pointerdown", (e) => {
+	if (e.target.closest("button") || isMaximized()) return;
+	const rect = winEl.getBoundingClientRect();
+	drag = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+	winEl.style.left = `${rect.left}px`;
+	winEl.style.top = `${rect.top}px`;
+	winEl.style.bottom = "auto"; // top now anchors; drop the default bottom pin
+	winEl.style.transform = "none";
+	titlebarEl.setPointerCapture(e.pointerId);
+});
+
+titlebarEl.addEventListener("pointermove", (e) => {
+	if (!drag) return;
+	moveTo(e.clientX - drag.dx, e.clientY - drag.dy);
+});
+
+const endDrag = () => {
+	drag = null;
+};
+titlebarEl.addEventListener("pointerup", endDrag);
+titlebarEl.addEventListener("pointercancel", endDrag);
+
+// --- Help / guide modal --------------------------------------------------------
+//
+// A plain-language walkthrough for non-technical visitors: opened by the ?
+// titlebar button, shown automatically on the first visit (localStorage flag),
+// closed via ×, Esc, or clicking the backdrop.
+
+const helpModal = document.getElementById("help-modal");
+const GUIDE_SEEN_KEY = "eq-guide-seen";
+
+function openHelp() {
+	helpModal.hidden = false;
+}
+
+function closeHelp() {
+	helpModal.hidden = true;
+	try {
+		localStorage.setItem(GUIDE_SEEN_KEY, "1");
+	} catch {
+		/* storage blocked (private mode) — the guide just reopens next visit */
+	}
+	term.focus();
+}
+
+document.getElementById("term-help").addEventListener("click", openHelp);
+document.getElementById("help-close").addEventListener("click", closeHelp);
+helpModal.addEventListener("click", (e) => {
+	if (e.target === helpModal) closeHelp(); // backdrop click, not the card
+});
+document.addEventListener("keydown", (e) => {
+	if (e.key === "Escape" && !helpModal.hidden) closeHelp();
+});
+
+try {
+	if (!localStorage.getItem(GUIDE_SEEN_KEY)) openHelp();
+} catch {
+	/* storage blocked — don't auto-open on every visit, the ? button remains */
+}
 
 term.focus();
 connect();
