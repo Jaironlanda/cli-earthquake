@@ -19,6 +19,16 @@
 
 const SOURCE_ID = "earthquakes";
 const CIRCLE_LAYER = "earthquake-circles";
+/** Symbol layer that draws the animated ripple icon under each core dot. */
+const RIPPLE_LAYER = "earthquake-ripples";
+const RIPPLE_PERIOD_MS = 2600;
+/** How far a ripple grows beyond the core dot before fading out (× radius). */
+const RIPPLE_SPREAD = 2.4;
+/** Canvas size of one pulse icon (device px; rendered at pixelRatio 2). */
+const PULSE_SIZE = 128;
+
+/** Severity band colours — single source for MAG_COLOR and the pulse icons. */
+const BAND_COLORS = ["#6b7a8d", "#3fb950", "#d29922", "#f85149", "#ff3b30"];
 
 /**
  * Circle colour by magnitude — mirrors the terminal severity bands in
@@ -28,15 +38,30 @@ const CIRCLE_LAYER = "earthquake-circles";
 const MAG_COLOR = [
 	"step",
 	["coalesce", ["get", "mag"], -1],
-	"#6b7a8d", // < 4  minor    (muted gray)
+	BAND_COLORS[0], // < 4  minor    (muted gray)
 	4,
-	"#3fb950", // 4–5  light    (green)
+	BAND_COLORS[1], // 4–5  light    (green)
 	5,
-	"#d29922", // 5–6  moderate (amber)
+	BAND_COLORS[2], // 5–6  moderate (amber)
 	6,
-	"#f85149", // 6–7  strong   (red)
+	BAND_COLORS[3], // 6–7  strong   (red)
 	7,
-	"#ff3b30", // 7+   major    (bright red)
+	BAND_COLORS[4], // 7+   major    (bright red)
+];
+
+/** Pick the pulse icon for a feature's severity band (mirrors MAG_COLOR). */
+const PULSE_ICON = [
+	"step",
+	["coalesce", ["get", "mag"], -1],
+	"eq-pulse-0",
+	4,
+	"eq-pulse-1",
+	5,
+	"eq-pulse-2",
+	6,
+	"eq-pulse-3",
+	7,
+	"eq-pulse-4",
 ];
 
 /** Circle radius grows with magnitude (null → smallest). */
@@ -76,6 +101,54 @@ function syncSource() {
 	if (!loaded) return;
 	const src = map.getSource(SOURCE_ID);
 	if (src) src.setData(collection());
+}
+
+/**
+ * An animated pulse icon (MapLibre StyleImageInterface): two rings, phase-
+ * offset by half a period, grow from the core-dot radius out to the icon edge
+ * while fading. Only this small canvas redraws each frame — the map style is
+ * never mutated, so the layer doesn't flicker. While no features are plotted,
+ * render() returns false and the map stops repainting; the next setData wakes
+ * it back up.
+ */
+function makePulseImage(color) {
+	return {
+		width: PULSE_SIZE,
+		height: PULSE_SIZE,
+		data: new Uint8Array(PULSE_SIZE * PULSE_SIZE * 4),
+		onAdd() {
+			const canvas = document.createElement("canvas");
+			canvas.width = PULSE_SIZE;
+			canvas.height = PULSE_SIZE;
+			this.ctx = canvas.getContext("2d", { willReadFrequently: true });
+		},
+		render() {
+			if (featureById.size === 0) return false;
+			const ctx = this.ctx;
+			const half = PULSE_SIZE / 2;
+			const maxR = half - 2;
+			// The ring starts at the core dot's edge (1× of the 1+SPREAD total).
+			const coreFrac = 1 / (1 + RIPPLE_SPREAD);
+			ctx.clearRect(0, 0, PULSE_SIZE, PULSE_SIZE);
+			for (let i = 0; i < 2; i++) {
+				const t = (performance.now() / RIPPLE_PERIOD_MS + i / 2) % 1;
+				const fade = 1 - t;
+				ctx.beginPath();
+				ctx.arc(half, half, maxR * (coreFrac + (1 - coreFrac) * t), 0, 2 * Math.PI);
+				ctx.fillStyle = color;
+				ctx.globalAlpha = 0.1 * fade;
+				ctx.fill();
+				ctx.strokeStyle = color;
+				ctx.lineWidth = 3;
+				ctx.globalAlpha = 0.7 * fade;
+				ctx.stroke();
+			}
+			ctx.globalAlpha = 1;
+			this.data = ctx.getImageData(0, 0, PULSE_SIZE, PULSE_SIZE).data;
+			map.triggerRepaint();
+			return true;
+		},
+	};
 }
 
 /** Fit the viewport to the given features (skips a single point → gentle ease). */
@@ -124,10 +197,34 @@ function buildStyle(protomapsKey) {
 	};
 }
 
-/** Add the earthquake source, circle layer, and interactions after load. */
+/** Add the earthquake source, ripple + core layers, and interactions after load. */
 function addEarthquakeLayer() {
 	map.addSource(SOURCE_ID, { type: "geojson", data: collection() });
 
+	// One animated pulse icon per severity band (see makePulseImage).
+	for (let i = 0; i < BAND_COLORS.length; i++) {
+		map.addImage(`eq-pulse-${i}`, makePulseImage(BAND_COLORS[i]), {
+			pixelRatio: 2,
+		});
+	}
+
+	// Ripple rings under the core dot. icon-size scales the icon so its outer
+	// edge lands at (1 + RIPPLE_SPREAD) × the core dot's circle-radius; the
+	// icon renders at pixelRatio 2, so its display half-size is (SIZE/2 − 2)/2.
+	map.addLayer({
+		id: RIPPLE_LAYER,
+		type: "symbol",
+		source: SOURCE_ID,
+		layout: {
+			"icon-image": PULSE_ICON,
+			"icon-size": ["*", MAG_RADIUS, (1 + RIPPLE_SPREAD) / ((PULSE_SIZE / 2 - 2) / 2)],
+			"icon-allow-overlap": true,
+			"icon-ignore-placement": true,
+		},
+	});
+
+	// Core dot: transparent fill with a magnitude-coloured ring so the basemap
+	// shows through.
 	map.addLayer({
 		id: CIRCLE_LAYER,
 		type: "circle",
@@ -135,9 +232,10 @@ function addEarthquakeLayer() {
 		paint: {
 			"circle-radius": MAG_RADIUS,
 			"circle-color": MAG_COLOR,
-			"circle-opacity": 0.72,
-			"circle-stroke-width": 1,
-			"circle-stroke-color": "#0b0f14",
+			"circle-opacity": 0.28,
+			"circle-stroke-width": 1.5,
+			"circle-stroke-color": MAG_COLOR,
+			"circle-stroke-opacity": 0.9,
 		},
 	});
 
