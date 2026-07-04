@@ -19,9 +19,12 @@
 
 import { DurableObject } from "cloudflare:workers";
 import type { Env, EarthquakeRow } from "../types";
-import { executeCommand } from "../lib/commands";
+import { executeCommand, matchesWatch, type WatchFilter } from "../lib/commands";
 import { color, renderAlertBanner, renderWelcome } from "../lib/format";
 import { rowsToGeoJSON } from "../lib/geojson";
+
+/** Magnitude at or above which an alert also rings the terminal bell (Phase 8). */
+const BELL_MAGNITUDE = 5;
 
 /** Shape of an inbound client message. */
 interface InputMessage {
@@ -103,10 +106,17 @@ export class TerminalHub extends DurableObject<Env> {
     }
 
     try {
-      const { text, mapData, download } = await executeCommand(
+      const { text, mapData, download, watch } = await executeCommand(
         parsed.line,
         this.env,
       );
+      // Phase 8: `watch`/`unwatch` store an alert filter on this very socket.
+      // We use serializeAttachment so the subscription survives DO hibernation
+      // (getWebSockets() + deserializeAttachment() recover it during broadcast).
+      // `null` clears the filter; `undefined` leaves it as-is.
+      if (watch !== undefined) {
+        ws.serializeAttachment(watch);
+      }
       // Phase 7: `export` yields a file; the client saves it and prints `text`
       // as the confirmation. Everything else is a normal ANSI output frame.
       if (download) {
@@ -136,20 +146,51 @@ export class TerminalHub extends DurableObject<Env> {
   broadcastNewEarthquakes(records: EarthquakeRow[]): void {
     if (records.length === 0) return;
 
-    const frame = JSON.stringify({
-      type: "alert",
-      text: renderAlertBanner(records),
-      // Phase 6: the map upserts these points without clearing existing ones.
-      mapData: rowsToGeoJSON(records),
-    });
+    // Unfiltered frame, rendered once and reused for every socket without a
+    // `watch` subscription (the common case).
+    const allFrame = this.alertFrame(records);
 
     for (const ws of this.ctx.getWebSockets()) {
+      // A `watch` filter is stored as this socket's attachment (Phase 8). No
+      // attachment (null) means "send every alert" — the pre-Phase-8 behaviour.
+      let filter: WatchFilter | null = null;
+      try {
+        filter = ws.deserializeAttachment() as WatchFilter | null;
+      } catch {
+        filter = null;
+      }
+
+      let frame = allFrame;
+      if (filter) {
+        const visible = records.filter((r) => matchesWatch(r, filter!));
+        if (visible.length === 0) continue; // nothing this terminal cares about
+        frame = this.alertFrame(visible);
+      }
+
       try {
         ws.send(frame);
       } catch (error) {
         console.error("Alert broadcast to a socket failed:", error);
       }
     }
+  }
+
+  /**
+   * Build one `alert` frame for a set of records: the rendered banner, the map
+   * upsert data, and a `bell` flag the client uses to ring the terminal bell
+   * when something significant (≥ {@link BELL_MAGNITUDE}) arrives.
+   */
+  private alertFrame(records: EarthquakeRow[]): string {
+    const peak = Math.max(
+      ...records.map((r) => r.magdefault ?? -Infinity),
+    );
+    return JSON.stringify({
+      type: "alert",
+      text: renderAlertBanner(records),
+      // Phase 6: the map upserts these points without clearing existing ones.
+      mapData: rowsToGeoJSON(records),
+      bell: peak >= BELL_MAGNITUDE,
+    });
   }
 
   /** Close our end cleanly when the client disconnects. */

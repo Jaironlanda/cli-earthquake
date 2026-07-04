@@ -241,6 +241,278 @@ export function renderTrend(buckets: TrendBucket[], by: string): string {
   return [heading, "", ...lines, "", footer].join(EOL);
 }
 
+// --- Phase 8: stats / nearby / richter / sparkline / minimap / compare -----
+
+/** Aggregate figures for the `stats` command (one filtered slice of the table). */
+export interface QuakeStats {
+  total: number;
+  maxmag: number | null;
+  avgmag: number | null;
+  avgdepth: number | null;
+  first: string | null;
+  last: string | null;
+  strongest: EarthquakeRow | null;
+}
+
+/** Render the `stats` summary card: totals, extremes, and the strongest event. */
+export function renderStats(stats: QuakeStats): string {
+  if (stats.total === 0) {
+    return dim("No earthquakes match — nothing to summarise.");
+  }
+
+  const field = (label: string, value: string) =>
+    "  " + dim(label.padEnd(14)) + value;
+
+  const spanDays = daysBetween(stats.first, stats.last);
+  const perDay = spanDays > 0 ? stats.total / spanDays : stats.total;
+
+  const lines = [
+    bold(color("Earthquake statistics", "cyan")),
+    "",
+    field("Records", String(stats.total)),
+    field(
+      "Peak magnitude",
+      stats.maxmag === null
+        ? "—"
+        : color(stats.maxmag.toFixed(1), magnitudeColor(stats.maxmag)),
+    ),
+    field("Avg magnitude", stats.avgmag === null ? "—" : stats.avgmag.toFixed(2)),
+    field("Avg depth", stats.avgdepth === null ? "—" : `${stats.avgdepth.toFixed(1)} km`),
+    field("Per day", `${perDay.toFixed(1)}`),
+    field(
+      "Time span",
+      stats.first === null
+        ? "—"
+        : `${stats.first.slice(0, 10)} → ${(stats.last ?? "").slice(0, 10)}` +
+          dim(` (${spanDays} day${spanDays === 1 ? "" : "s"})`),
+    ),
+  ];
+
+  if (stats.strongest) {
+    const s = stats.strongest;
+    lines.push(
+      "",
+      field(
+        "Strongest",
+        color(
+          (s.magdefault ?? 0).toFixed(1),
+          magnitudeColor(s.magdefault),
+        ) +
+          "  " +
+          (s.location ?? "—") +
+          dim(`  ${s.utcdatetime.slice(0, 10)}`),
+      ),
+    );
+  }
+
+  return lines.join(EOL);
+}
+
+/** Convert a whole-earth day count between two ISO timestamps (0 if unknown). */
+function daysBetween(a: string | null, b: string | null): number {
+  if (!a || !b) return 0;
+  const ms = Date.parse(b) - Date.parse(a);
+  if (!Number.isFinite(ms)) return 0;
+  return Math.max(1, Math.round(ms / 86_400_000));
+}
+
+/** An earthquake row annotated with its distance from a query point. */
+export type RowWithDistance = EarthquakeRow & { distanceKm: number };
+
+/** Render the `nearby` result: rows ordered by distance, with a distance column. */
+export function renderNearbyTable(
+  rows: RowWithDistance[],
+  origin: { lat: number; lon: number },
+): string {
+  const head =
+    bold(`Earthquakes near ${origin.lat.toFixed(3)}, ${origin.lon.toFixed(3)}`) +
+    EOL +
+    "";
+  if (rows.length === 0) {
+    return head + EOL + dim("None found within the search radius.");
+  }
+
+  const gap = "  ";
+  const cols = [
+    { header: "DIST", width: 8 },
+    { header: "MAG", width: 4 },
+    { header: "DEPTH", width: 6 },
+    { header: "LOCATION", width: 30 },
+    { header: "TIME (UTC)", width: 19 },
+  ];
+  const headerLine = bold(cols.map((c) => c.header.padEnd(c.width)).join(gap));
+
+  const body = rows.map((r) => {
+    const dist = cell(`${r.distanceKm.toFixed(0)}km`, cols[0].width);
+    const mag = formatMagnitude(r.magdefault, cols[1].width);
+    const depth = cell(r.depth === null ? "—" : `${r.depth}km`, cols[2].width);
+    const loc = cell(r.location ?? "—", cols[3].width);
+    const time = dim(cell(r.utcdatetime.replace("T", " "), cols[4].width));
+    return [dist, mag, depth, loc, time].join(gap);
+  });
+
+  const footer = dim(`${rows.length} within range.`);
+  return [head + headerLine, ...body, "", footer].join(EOL);
+}
+
+/** A Richter-scale severity band: threshold, label, and a plain-language effect. */
+const RICHTER_BANDS: { min: number; label: string; effect: string }[] = [
+  { min: 8, label: "Great", effect: "Catastrophic — total destruction over vast areas." },
+  { min: 7, label: "Major", effect: "Serious damage across large regions." },
+  { min: 6, label: "Strong", effect: "Destructive in populated areas up to ~150km across." },
+  { min: 5, label: "Moderate", effect: "Damage to poorly built structures; felt widely." },
+  { min: 4, label: "Light", effect: "Noticeable shaking; rattles indoors, rarely damaging." },
+  { min: 2, label: "Minor", effect: "Often felt, but seldom causes damage." },
+  { min: -Infinity, label: "Micro", effect: "Not felt by people; recorded by instruments only." },
+];
+
+/**
+ * Explain what a magnitude means (`richter <mag>`): its severity band, a
+ * plain-language effect, and its energy relative to lower magnitudes (each whole
+ * step ≈ 31.6× the energy, since E ∝ 10^(1.5·M)).
+ */
+export function renderRichter(mag: number): string {
+  const band = RICHTER_BANDS.find((b) => mag >= b.min) ?? RICHTER_BANDS[RICHTER_BANDS.length - 1];
+  const paint = magnitudeColor(mag);
+
+  // Gutenberg–Richter energy (joules) ≈ 10^(1.5·M + 4.8); express as tons of TNT.
+  const joules = Math.pow(10, 1.5 * mag + 4.8);
+  const tonsTnt = joules / 4.184e9;
+
+  const lines = [
+    bold("Magnitude ") + color(mag.toFixed(1), paint) + "  " + color(`— ${band.label}`, paint),
+    "",
+    "  " + band.effect,
+    "",
+    "  " + dim("Energy    ") + `≈ ${formatTnt(tonsTnt)} of TNT`,
+    "  " + dim("Vs M") + dim((mag - 1).toFixed(0).padEnd(6)) + `≈ 32× more energy per whole step`,
+  ];
+  return lines.join(EOL);
+}
+
+/** Human-friendly TNT mass (kg → kilotons) for the richter energy readout. */
+function formatTnt(tons: number): string {
+  if (tons < 0.001) return `${(tons * 1e6).toFixed(0)} g`;
+  if (tons < 1) return `${(tons * 1000).toFixed(0)} kg`;
+  if (tons < 1000) return `${tons.toFixed(0)} tons`;
+  if (tons < 1e6) return `${(tons / 1000).toFixed(1)} kilotons`;
+  return `${(tons / 1e6).toFixed(1)} megatons`;
+}
+
+/** Unicode ramp for the `sparkline` command, low → high. */
+const SPARK_CHARS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+/** Render a compact one-line `sparkline` of counts per bucket, coloured by peak mag. */
+export function renderSparkline(buckets: TrendBucket[], by: string): string {
+  if (buckets.length === 0) {
+    return dim("No earthquakes match — nothing to chart.");
+  }
+
+  const maxCount = Math.max(...buckets.map((b) => b.count));
+  const spark = buckets
+    .map((b) => {
+      const level = maxCount === 0 ? 0 : Math.round((b.count / maxCount) * (SPARK_CHARS.length - 1));
+      return color(SPARK_CHARS[level], magnitudeColor(b.maxmag));
+    })
+    .join("");
+
+  const total = buckets.reduce((sum, b) => sum + b.count, 0);
+  const range =
+    buckets.length > 1
+      ? `${buckets[0].bucket} → ${buckets[buckets.length - 1].bucket}`
+      : buckets[0].bucket;
+
+  return (
+    dim(`per ${by}  `) +
+    spark +
+    dim(`  ${total} quake${total === 1 ? "" : "s"}, ${range}`)
+  );
+}
+
+/** Render recent quakes as points on a small ASCII lat/lon grid (`minimap`). */
+export function renderMinimap(rows: EarthquakeRow[]): string {
+  const pts = rows.filter(
+    (r) => Number.isFinite(r.lat) && Number.isFinite(r.lon),
+  );
+  if (pts.length === 0) {
+    return dim("No plottable earthquakes (missing coordinates).");
+  }
+
+  const W = 48;
+  const H = 16;
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+  for (const p of pts) {
+    minLat = Math.min(minLat, p.lat);
+    maxLat = Math.max(maxLat, p.lat);
+    minLon = Math.min(minLon, p.lon);
+    maxLon = Math.max(maxLon, p.lon);
+  }
+  // Pad a degenerate (single-point or colinear) extent so the maths stays finite.
+  if (maxLat - minLat < 0.5) { minLat -= 0.5; maxLat += 0.5; }
+  if (maxLon - minLon < 0.5) { minLon -= 0.5; maxLon += 0.5; }
+
+  // Grid holds the peak magnitude seen in each cell (null = empty).
+  const grid: (number | null)[][] = Array.from({ length: H }, () =>
+    Array<number | null>(W).fill(null),
+  );
+  for (const p of pts) {
+    const x = Math.round(((p.lon - minLon) / (maxLon - minLon)) * (W - 1));
+    const y = Math.round(((maxLat - p.lat) / (maxLat - minLat)) * (H - 1));
+    const mag = p.magdefault ?? 0;
+    if (grid[y][x] === null || mag > (grid[y][x] as number)) grid[y][x] = mag;
+  }
+
+  const border = dim("+" + "-".repeat(W) + "+");
+  const lines = [border];
+  for (let y = 0; y < H; y++) {
+    let rowStr = dim("|");
+    for (let x = 0; x < W; x++) {
+      const mag = grid[y][x];
+      rowStr += mag === null ? " " : color("●", magnitudeColor(mag));
+    }
+    rowStr += dim("|");
+    lines.push(rowStr);
+  }
+  lines.push(border);
+
+  const bounds = dim(
+    `lat ${minLat.toFixed(1)}…${maxLat.toFixed(1)}  ` +
+      `lon ${minLon.toFixed(1)}…${maxLon.toFixed(1)}  ` +
+      `${pts.length} plotted`,
+  );
+  return [bold("Recent earthquakes"), ...lines, bounds].join(EOL);
+}
+
+/** One side of a `compare` — a named region's aggregate figures. */
+export interface CompareSide {
+  label: string;
+  total: number;
+  maxmag: number | null;
+  avgmag: number | null;
+}
+
+/** Render a side-by-side `compare` of two regions' counts and magnitudes. */
+export function renderCompare(a: CompareSide, b: CompareSide): string {
+  const nameW = Math.max(a.label.length, b.label.length, 8);
+  const row = (side: CompareSide) => {
+    const mag = side.maxmag === null ? "—" : side.maxmag.toFixed(1);
+    return (
+      "  " +
+      bold(side.label.padEnd(nameW)) +
+      "  " +
+      dim("count ") +
+      String(side.total).padStart(5) +
+      "   " +
+      dim("peak ") +
+      color(mag.padStart(4), magnitudeColor(side.maxmag)) +
+      "   " +
+      dim("avg ") +
+      (side.avgmag === null ? "—" : side.avgmag.toFixed(2))
+    );
+  };
+  return [bold(color("Region comparison", "cyan")), "", row(a), row(b)].join(EOL);
+}
+
 /** Render a single earthquake as a detailed key/value block (for `search <id>`). */
 export function renderEarthquakeDetail(row: EarthquakeRow): string {
   const field = (label: string, value: string) =>
