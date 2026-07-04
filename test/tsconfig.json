@@ -1,0 +1,15 @@
+{
+  // Editor/type-check config for the test suite. The root tsconfig only
+  // includes `src/`, so tests get their own that pulls in the Workers test
+  // types and relaxes `verbatimModuleSyntax` (Vitest transpiles via esbuild).
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/vitest-pool-workers/types", "vitest/globals"],
+    "verbatimModuleSyntax": false
+  },
+  "include": [
+    "./**/*.ts",
+    "../src/**/*.ts",
+    "../worker-configuration.d.ts"
+  ]
+}

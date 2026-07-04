@@ -393,6 +393,17 @@ const COMMANDS: CommandSpec[] = [
     run: () => ({ text: helpText() }),
   },
   {
+    name: "clear",
+    aliases: ["cls"],
+    usage: "clear",
+    summary: "Clear the terminal screen.",
+    options: [],
+    // The browser client short-circuits this locally for an instant, top-anchored
+    // redraw (see public/app.js); this handler is the fallback for raw ws clients,
+    // returning the ANSI clear-screen + clear-scrollback + home sequence.
+    run: () => ({ text: "\x1b[2J\x1b[3J\x1b[H" }),
+  },
+  {
     name: "list",
     aliases: ["ls"],
     usage: "list [options]",

@@ -20,7 +20,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env, EarthquakeRow } from "../types";
 import { executeCommand } from "../lib/commands";
-import { bold, color, dim, EOL, renderAlertBanner } from "../lib/format";
+import { color, renderAlertBanner, renderWelcome } from "../lib/format";
 import { rowsToGeoJSON } from "../lib/geojson";
 
 /** Shape of an inbound client message. */
@@ -169,12 +169,8 @@ export class TerminalHub extends DurableObject<Env> {
     console.error("WebSocket error:", error);
   }
 
-  /** The greeting written to a freshly connected terminal. */
+  /** The init screen written to a freshly connected terminal. */
   private welcomeBanner(): string {
-    return [
-      bold(color("Earthquake CLI", "cyan")) +
-        dim(" — live seismic data terminal"),
-      dim('Type "help" to get started.'),
-    ].join(EOL);
+    return renderWelcome();
   }
 }
