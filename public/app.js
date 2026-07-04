@@ -153,9 +153,10 @@ function handleServerMessage(msg) {
 			if (msg.mapData) window.EarthquakeMap?.setFeatures(msg.mapData);
 			busy = false;
 			newPrompt();
-			// Map-driven commands: get the window out of the way so the plotted
-			// result is visible; the dock chip restores it.
-			if (msg.mapData?.features?.length) minimize();
+			// Map-driven commands: fade the window to a ghost (90% transparent)
+			// so the plotted result shows through; clicking or typing in the
+			// terminal brings it back.
+			if (msg.mapData?.features?.length) setGhost(true);
 			break;
 		case "download":
 			// Phase 7: `export` result. xterm.js has no file I/O, so we save the
@@ -177,6 +178,8 @@ function handleServerMessage(msg) {
 			// Phase 6: upsert the new quakes onto the map without clearing it.
 			if (msg.mapData) window.EarthquakeMap?.addFeatures(msg.mapData);
 			if (!busy && greeted) render();
+			// A ghosted window would hide the banner; bring it back.
+			setGhost(false);
 			// If the window is minimized the user can't see the banner; pulse the
 			// dock chip until they restore the terminal.
 			if (winEl.classList.contains("minimized"))
@@ -243,6 +246,9 @@ function submit() {
 // --- Key handling ----------------------------------------------------------
 
 term.onData((data) => {
+	// Typing means the user wants the terminal back — drop any ghost fade.
+	setGhost(false);
+
 	// While a command is in flight, swallow input except Ctrl+C (cancel).
 	if (busy) {
 		if (data === "\x03") {
@@ -407,9 +413,27 @@ function minimize() {
 
 function restoreFromDock() {
 	winEl.classList.remove("minimized");
+	setGhost(false);
 	dockEl.classList.remove("visible", "term-dock--alert");
 	term.focus();
 }
+
+/**
+ * Ghost mode: after a map-plotting command the window fades to 90%
+ * transparency (CSS .ghost) so the result shows through it. Hover previews it
+ * (CSS); clicking or typing in the terminal restores it for good.
+ */
+function setGhost(on) {
+	winEl.classList.toggle("ghost", on);
+}
+
+winEl.addEventListener("pointerdown", () => setGhost(false));
+
+// Interacting with the map tucks the terminal away so it never blocks the view;
+// the dock chip (top-center) brings it back.
+document.getElementById("map").addEventListener("pointerdown", () => {
+	if (!winEl.classList.contains("minimized")) minimize();
+});
 
 btnMax.addEventListener("click", () => setMaximized(!isMaximized()));
 btnMin.addEventListener("click", minimize);
@@ -450,7 +474,7 @@ titlebarEl.addEventListener("pointerdown", (e) => {
 	drag = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
 	winEl.style.left = `${rect.left}px`;
 	winEl.style.top = `${rect.top}px`;
-	winEl.style.bottom = "auto"; // top now anchors; drop the default bottom pin
+	winEl.style.bottom = "auto"; // top anchors while dragging
 	winEl.style.transform = "none";
 	titlebarEl.setPointerCapture(e.pointerId);
 });
