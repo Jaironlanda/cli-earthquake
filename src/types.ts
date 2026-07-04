@@ -10,6 +10,8 @@ export interface Env {
   DB: D1Database;
   /** Bearer token guarding /admin/* routes. Set via `wrangler secret put ADMIN_TOKEN`. */
   ADMIN_TOKEN: string;
+  /** Durable Object namespace for the WebSocket terminal hub (Phase 3). */
+  TERMINAL_HUB: DurableObjectNamespace<import("./durable-objects/terminal-hub").TerminalHub>;
 }
 
 /**

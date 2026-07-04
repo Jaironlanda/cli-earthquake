@@ -4,11 +4,19 @@
  * Phase 1: a single admin route (`POST /admin/ingest`) drives the ingestion
  * pipeline; everything else falls through to the static assets in public/.
  * Phase 2: a `scheduled()` cron handler runs the same pipeline every 15 minutes.
- * Later phases add WebSocket terminal routing and API endpoints.
+ * Phase 3: `/ws` upgrades to a WebSocket handled by the TerminalHub Durable
+ * Object; later phases add the xterm.js frontend and API endpoints.
  */
 
 import type { Env } from "./types";
 import { ingest } from "./lib/ingest";
+
+// Re-exported so the Workers runtime can instantiate the Durable Object class
+// declared in wrangler.jsonc's `durable_objects.bindings`.
+export { TerminalHub } from "./durable-objects/terminal-hub";
+
+/** Single, well-known DO instance holding every terminal session. */
+const TERMINAL_HUB_NAME = "global-hub";
 
 /** Constant-time-ish bearer check for /admin/* routes. */
 function isAuthorized(request: Request, env: Env): boolean {
@@ -45,6 +53,17 @@ export default {
 
     if (url.pathname === "/admin/ingest") {
       return handleIngest(request, env);
+    }
+
+    // WebSocket terminal: route to the single global TerminalHub instance.
+    if (url.pathname === "/ws") {
+      if (request.headers.get("Upgrade") !== "websocket") {
+        return new Response("Expected a WebSocket upgrade request", {
+          status: 426,
+        });
+      }
+      const stub = env.TERMINAL_HUB.getByName(TERMINAL_HUB_NAME);
+      return stub.fetch(request);
     }
 
     // Everything else: serve static assets from public/.

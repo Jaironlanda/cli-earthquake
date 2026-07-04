@@ -14,14 +14,14 @@ Durable Objects, and Cron Triggers.
 
 ## Status
 
-Built as a series of independently verifiable phases. **Phase 1 (data layer) is
+Built as a series of independently verifiable phases. **Phases 1–3 are
 complete**; later phases are not built yet.
 
 | Phase | Scope | State |
 | ----- | ----- | ----- |
 | 1 | Data layer — D1 schema + fetch → dedupe → store | ✅ Done |
 | 2 | Cron automation (15-min ingestion) | ✅ Done |
-| 3 | Terminal backend (Durable Object + WebSockets) | ⬜ Planned |
+| 3 | Terminal backend (Durable Object + WebSockets) | ✅ Done |
 | 4 | Terminal frontend (xterm.js) | ⬜ Planned |
 | 5 | Real-time alerts | ⬜ Planned |
 | 6 | Map panel (Protomaps + MapLibre) | ⬜ Planned |
@@ -30,18 +30,35 @@ complete**; later phases are not built yet.
 ## Architecture (current)
 
 ```
-api.data.gov.my  ──fetch──▶  Worker (src/index.ts)  ──INSERT OR IGNORE──▶  D1 (earthquakes)
-                             POST /admin/ingest
+api.data.gov.my ─fetch─▶ Worker (src/index.ts) ─INSERT OR IGNORE─▶ D1 (earthquakes)
+                         POST /admin/ingest + */15 cron                    │
+                                                                           │ query
+   browser ◀─WebSocket──▶ TerminalHub (Durable Object) ────────────────────┘
+              /ws           parse command → format ANSI reply
 ```
 
 Each record's primary key is a truncated SHA-256 of `utcdatetime|lat|lon`. The
 upstream feed has no id field, so hashing its natural key makes ingestion
 idempotent: re-fetching the same feed inserts zero new rows.
 
-- `src/index.ts` — Worker entry; bearer-guarded `POST /admin/ingest`, else static assets.
+- `src/index.ts` — Worker entry; bearer-guarded `POST /admin/ingest`, `/ws` → Durable Object, else static assets.
 - `src/lib/ingest.ts` — fetch, `computeId`, batched upsert.
+- `src/durable-objects/terminal-hub.ts` — `TerminalHub` DO: WebSocket Hibernation session hub for the terminal.
+- `src/lib/commands.ts` — `executeCommand()`: parses `help` / `list` / `search` and runs parameterized D1 queries.
+- `src/lib/format.ts` — ANSI colour + fixed-width table/detail renderers (magnitude colour-coded by severity).
 - `src/types.ts` — `Env` + API/row types.
 - `migrations/0001_init.sql` — `earthquakes` table (structured fields only, no raw JSON).
+
+### Terminal commands (over `/ws`)
+
+The WebSocket speaks JSON: send `{"type":"input","line":"<command>"}`, receive
+`{"type":"output","text":"...ANSI..."}` (or `welcome` / `error`).
+
+| Command | Purpose |
+| ------- | ------- |
+| `help` | List available commands. |
+| `list [--mag>N] [--since YYYY-MM-DD] [--location STR] [--limit N]` | Recent earthquakes, newest first. |
+| `search <id \| text>` | 16-hex id → detail view; otherwise location text search. |
 
 ## Development
 
@@ -70,6 +87,17 @@ curl -X POST localhost:8787/admin/ingest -H "Authorization: Bearer $TOKEN"
 
 npx wrangler d1 execute earthquake-db --local \
   --command "SELECT count(*) FROM earthquakes"
+```
+
+Exercise the terminal backend over WebSocket (any WS client; here with Node's
+built-in `WebSocket`):
+
+```bash
+node --input-type=module -e '
+const ws = new WebSocket("ws://localhost:8787/ws");
+ws.onmessage = (e) => { console.log(JSON.parse(e.data).text); ws.close(); };
+ws.onopen = () => ws.send(JSON.stringify({ type: "input", line: "list --mag>6" }));
+'
 ```
 
 ## Deployment

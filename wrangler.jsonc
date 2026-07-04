@@ -12,9 +12,27 @@
 		"directory": "./public",
 		// Access static assets from the Worker via env.ASSETS.fetch(request).
 		"binding": "ASSETS",
-		// Invoke the Worker (not the static-asset server) for admin routes.
-		"run_worker_first": ["/admin/*"]
+		// Invoke the Worker (not the static-asset server) for admin routes and
+		// the WebSocket terminal endpoint.
+		"run_worker_first": ["/admin/*", "/ws"]
 	},
+	// Durable Object: TerminalHub holds every WebSocket terminal session (Phase 3).
+	// A single instance is addressed by name ("global-hub") in src/index.ts.
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "TERMINAL_HUB",
+				"class_name": "TerminalHub"
+			}
+		]
+	},
+	// SQLite-backed DO class (required storage backend for new Durable Objects).
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["TerminalHub"]
+		}
+	],
 	// D1 database holding the `earthquakes` table. `database_id` is filled in
 	// after `wrangler d1 create earthquake-db`.
 	"d1_databases": [

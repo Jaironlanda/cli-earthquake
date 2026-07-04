@@ -9,27 +9,43 @@ earthquake data from `api.data.gov.my`, built on Cloudflare Workers. The full,
 phased build is described in `planning/implementation-plan.md`; `planning/project-draft.md`
 holds the original spec. Work proceeds one phase at a time, each on its own branch.
 
-**Phases 1 (data layer) and 2 (cron automation) are done** — the rest of the plan
-(Durable Object terminal backend, xterm.js frontend, real-time alerts, Protomaps
-map, export) is not built yet.
+**Phases 1 (data layer), 2 (cron automation), and 3 (terminal backend) are done**
+— the rest of the plan (xterm.js frontend, real-time alerts, Protomaps map, export)
+is not built yet.
 
 Current code:
 
 - `src/index.ts` — Worker entry (`fetch` + `scheduled`). Routes `POST /admin/ingest`
-  (bearer-guarded by `ADMIN_TOKEN`) through the ingestion pipeline; everything else
-  falls through to `env.ASSETS.fetch(request)` (static assets in `public/`). The
+  (bearer-guarded by `ADMIN_TOKEN`) through the ingestion pipeline; routes `/ws`
+  (WebSocket upgrade) to the single `TerminalHub` DO (`getByName("global-hub")`);
+  everything else falls through to `env.ASSETS.fetch(request)` (static assets in
+  `public/`). Also re-exports `TerminalHub` so the runtime can instantiate it. The
   `scheduled()` cron handler runs the same idempotent pipeline every 15 minutes.
 - `src/lib/ingest.ts` — `computeId()` (truncated SHA-256 of `utcdatetime|lat|lon`,
   giving each record a stable id since the API has none), `fetchLatestEarthquakes()`,
   `upsertEarthquakes()` (batched `INSERT OR IGNORE` → idempotent ingestion).
-- `src/types.ts` — `Env` bindings + `EarthquakeApiRecord` / `EarthquakeRow`.
+- `src/durable-objects/terminal-hub.ts` — `TerminalHub extends DurableObject<Env>`.
+  Uses the **WebSocket Hibernation API** (`ctx.acceptWebSocket`), so the DO can be
+  evicted while sockets stay open (matters for Phase 5 alert fan-out).
+  `webSocketMessage()` parses `{type:"input",line}`, calls `executeCommand()`, and
+  replies `{type:"output",text}` (or `welcome` / `error`).
+- `src/lib/commands.ts` — `executeCommand(line, env)`: quote-aware tokenizer, parses
+  `help`, `list [--mag>N] [--since DATE] [--location STR] [--limit N]`,
+  `search <id|text>`, and runs **parameterized** D1 queries. User-facing problems
+  return a friendly error string; unexpected errors are re-thrown.
+- `src/lib/format.ts` — ANSI helpers, magnitude→colour severity mapping, and
+  fixed-width table + detail renderers. Uses `\r\n` line endings for xterm.js.
+- `src/types.ts` — `Env` bindings (incl. `TERMINAL_HUB`) + `EarthquakeApiRecord` /
+  `EarthquakeRow`.
 - `migrations/0001_init.sql` — `earthquakes` table, indexed on `utcdatetime`,
   `magdefault`, `location`. Stores only structured fields (no raw-JSON blob) to keep
   the indefinitely-growing table small.
 - `public/index.html` — still the default scaffold page (replaced in Phase 4).
 
-Bindings in `wrangler.jsonc`: `ASSETS` (static assets, `run_worker_first: ["/admin/*"]`)
-and `DB` (D1 database `earthquake-db`); `triggers.crons: ["*/15 * * * *"]` drives
+Bindings in `wrangler.jsonc`: `ASSETS` (static assets,
+`run_worker_first: ["/admin/*", "/ws"]`), `DB` (D1 database `earthquake-db`), and
+`TERMINAL_HUB` (Durable Object → `TerminalHub`; `migrations` tag `v1`,
+`new_sqlite_classes: ["TerminalHub"]`); `triggers.crons: ["*/15 * * * *"]` drives
 the `scheduled()` handler.
 
 ## Commands
@@ -49,6 +65,9 @@ There is no lint or test script configured yet.
 - The live data source (`https://api.data.gov.my/weather/warning/earthquake/`) is
   unauthenticated. Trigger ingestion locally with
   `curl -X POST localhost:8787/admin/ingest -H "Authorization: Bearer <token>"`.
+- The terminal backend (`/ws`) is unauthenticated. Test it with any WebSocket
+  client (e.g. Node's built-in `WebSocket`) by sending
+  `{"type":"input","line":"list --mag>6"}` and reading the `output` reply.
 
 ## Cloudflare Workers guidance
 
