@@ -25,6 +25,14 @@ filtering: `watch [--mag>N] [--location STR]` / `unwatch` store a filter on the
 WebSocket (`serializeAttachment`, survives hibernation) so alerts fan out only to
 matching sockets, and significant alerts (≥ mag 5) ring the terminal bell (`\x07`).
 
+**Viewer-timezone display (post-Phase-8)**: the browser sends its IANA timezone
+(`Intl.DateTimeFormat().resolvedOptions().timeZone`) as `?tz=` on the `/ws` URL;
+the DO validates it (`resolveTimeZone`) and persists it in the socket attachment,
+and every rendered timestamp (welcome banner, tables, detail cards, alerts, map
+popups) is shown 12-hour `MM-DD-YYYY hh:mm AM/PM` in that zone with a short zone
+label (e.g. `GMT+8`), falling back to UTC. Stored data stays UTC; `--since`
+filters, `trend`/`sparkline` bucket labels, and CSV/JSON exports remain UTC.
+
 Current code:
 
 - `src/index.ts` — Worker entry (`fetch` + `scheduled`). Routes `POST /admin/ingest`
@@ -54,15 +62,17 @@ Current code:
   / `error`. The `welcome` frame is `buildBanner()` (the `banner` command's year
   summary) with its `mapData` attached, so the map shows markers as soon as the
   site opens; a D1 failure falls back to the static `renderWelcome()`.
-  Per-socket state (the Phase 8 `CommandResult.watch` filter **and** the
-  throttle counter) lives in one `SocketState` object persisted via
+  Per-socket state (the Phase 8 `CommandResult.watch` filter, the
+  throttle counter, **and** the viewer's `tz` from the `?tz=` connect param)
+  lives in one `SocketState` object persisted via
   `ws.serializeAttachment()` (`readSocketState`/`writeSocketState` helpers tolerate
-  the legacy bare-filter attachment), so both survive DO hibernation.
+  the legacy bare-filter attachment), so all survive DO hibernation.
   `broadcastNewEarthquakes()` is an RPC method (called by `scheduled()`, not over
   `.fetch()`) that fans an alert to every `ctx.getWebSockets()`; per socket it reads
   the stored `watch` filter (`readSocketState()`), skips or narrows the record
   set to matches, and sends `{type:"alert",text,mapData,bell}` (`bell` set when peak
-  magnitude ≥ 5, Phase 8).
+  magnitude ≥ 5, Phase 8), with banner times rendered in each socket's timezone
+  (unfiltered frames cached per zone).
 - `src/lib/commands.ts` — `executeCommand(line, env)`: quote-aware tokenizer + a
   shared arg parser (`parseArgs`/`buildWhere`), driven by a single **command
   registry** (`COMMANDS`) that also renders `help` (so help can't drift from the
@@ -74,7 +84,10 @@ Current code:
   same `parseArgs`/`buildWhere` machinery; `nearby` bounding-boxes in SQL then
   refines with a JS haversine) plus `watch`/`unwatch`, which return a
   `CommandResult.watch` directive; `matchesWatch(row, filter)` (exported, unit-tested)
-  is the shared filter predicate the DO reuses at broadcast time. `buildBanner(env)`
+  is the shared filter predicate the DO reuses at broadcast time.
+  `executeCommand(line, env, tz?)` threads the viewer's timezone into the
+  registry handlers (`run(env, args, tz?)`) so time-rendering commands localise
+  their output. `buildBanner(env, tz?)`
   (exported) assembles the `banner` year summary (aggregates + strongest/latest +
   monthly buckets + up to `BANNER_MAP_ROWS` newest rows as map data); the year is
   the newest record's, falling back to the current UTC year. Runs
@@ -83,6 +96,11 @@ Current code:
   error string; unexpected errors are re-thrown.
 - `src/lib/format.ts` — ANSI helpers, magnitude→colour severity mapping, and
   fixed-width table + detail renderers. Uses `\r\n` line endings for xterm.js.
+  `resolveTimeZone()` validates an IANA zone; `makeTimeFormatter(tz?)` converts
+  the stored suffix-less UTC ISO timestamps into the viewer's zone (12-hour
+  `MM-DD-YYYY hh:mm AM/PM` + short zone label, UTC fallback), and every
+  time-rendering function takes an optional `tz` (zone named in table headers /
+  field labels).
   `renderAlertBanner()` formats the Phase 5 push (top-magnitude rows first, capped
   at 10 with a "…and N more" summary). `renderTrend()` draws the Phase 7 bar chart
   (bars scaled to the busiest bucket, coloured by peak magnitude). Phase 8 renderers:

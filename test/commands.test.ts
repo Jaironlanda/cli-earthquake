@@ -329,6 +329,39 @@ describe("banner", () => {
   });
 });
 
+describe("viewer timezone", () => {
+  // Seeded Aceh row is 2026-06-01T10:00:00 UTC; Kuala Lumpur is UTC+8.
+  it("list renders times in the given zone, named in the header", async () => {
+    const { text } = await executeCommand("list", env, "Asia/Kuala_Lumpur");
+    const plain = stripAnsi(text);
+    expect(plain).toContain("TIME (GMT+8)");
+    expect(plain).toContain("06-01-2026 06:00 PM");
+  });
+
+  it("falls back to UTC without a zone", async () => {
+    const { text } = await executeCommand("list", env);
+    const plain = stripAnsi(text);
+    expect(plain).toContain("TIME (UTC)");
+    expect(plain).toContain("06-01-2026 10:00 AM");
+  });
+
+  it("an invalid zone also falls back to UTC", async () => {
+    const { text } = await executeCommand("list", env, "Not/A_Zone");
+    expect(stripAnsi(text)).toContain("TIME (UTC)");
+  });
+
+  it("the detail card names the zone and converts the time", async () => {
+    const { text } = await executeCommand(
+      "search aaaa000000000001",
+      env,
+      "Asia/Kuala_Lumpur",
+    );
+    const plain = stripAnsi(text);
+    expect(plain).toContain("Time (GMT+8)");
+    expect(plain).toContain("06-01-2026 06:00 PM");
+  });
+});
+
 /** The seeded Aceh row (6.2), for direct matchesWatch unit tests. */
 function SAMPLE_ROW_ACEH() {
   return {

@@ -264,21 +264,29 @@ async function queryRows(
 // --- Commands --------------------------------------------------------------
 
 /** `list` — filtered, newest-first table plus map data. */
-async function runList(env: Env, tokens: string[]): Promise<CommandResult> {
+async function runList(
+  env: Env,
+  tokens: string[],
+  tz?: string,
+): Promise<CommandResult> {
   const args = parseArgs(
     tokens,
     new Set<OptionKey>(["mag", "since", "location", "limit"]),
   );
   const limit = clamp(args.limit ?? DEFAULT_LIMIT, 1, MAX_LIMIT);
   const rows = await queryRows(env, args, limit);
-  return { text: renderEarthquakeTable(rows), mapData: rowsToGeoJSON(rows) };
+  return { text: renderEarthquakeTable(rows, tz), mapData: rowsToGeoJSON(rows) };
 }
 
 /**
  * `search` — a single 16-hex-char token is an id (exact lookup → detail view);
  * anything else is a free-text location search.
  */
-async function runSearch(env: Env, tokens: string[]): Promise<CommandResult> {
+async function runSearch(
+  env: Env,
+  tokens: string[],
+  tz?: string,
+): Promise<CommandResult> {
   const query = tokens.join(" ").trim();
   if (!query) {
     throw new CommandError("Usage: search <id | location text>");
@@ -294,7 +302,7 @@ async function runSearch(env: Env, tokens: string[]): Promise<CommandResult> {
 
     if (row) {
       return {
-        text: renderEarthquakeDetail(row),
+        text: renderEarthquakeDetail(row, tz),
         mapData: rowsToGeoJSON([row]),
       };
     }
@@ -313,7 +321,7 @@ async function runSearch(env: Env, tokens: string[]): Promise<CommandResult> {
     .all<EarthquakeRow>();
 
   const rows = results ?? [];
-  return { text: renderEarthquakeTable(rows), mapData: rowsToGeoJSON(rows) };
+  return { text: renderEarthquakeTable(rows, tz), mapData: rowsToGeoJSON(rows) };
 }
 
 /** `export csv|json [filters]` — serialize the filtered set to a download. */
@@ -417,7 +425,11 @@ async function runSparkline(env: Env, tokens: string[]): Promise<CommandResult> 
 }
 
 /** `stats [filters]` — aggregate summary card for the filtered slice. */
-async function runStats(env: Env, tokens: string[]): Promise<CommandResult> {
+async function runStats(
+  env: Env,
+  tokens: string[],
+  tz?: string,
+): Promise<CommandResult> {
   const args = parseArgs(
     tokens,
     new Set<OptionKey>(["mag", "since", "location"]),
@@ -456,7 +468,7 @@ async function runStats(env: Env, tokens: string[]): Promise<CommandResult> {
     last: agg?.last ?? null,
     strongest,
   };
-  return { text: renderStats(stats), mapData: strongest ? rowsToGeoJSON([strongest]) : undefined };
+  return { text: renderStats(stats, tz), mapData: strongest ? rowsToGeoJSON([strongest]) : undefined };
 }
 
 /** Earth radius in km for the haversine distance used by `nearby`. */
@@ -480,7 +492,11 @@ const NEARBY_MAX_RADIUS = 20_000;
 const NEARBY_CANDIDATES = 2000;
 
 /** `nearby <lat> <lon> [--radius km] [--mag>N] [--limit N]` — closest quakes. */
-async function runNearby(env: Env, tokens: string[]): Promise<CommandResult> {
+async function runNearby(
+  env: Env,
+  tokens: string[],
+  tz?: string,
+): Promise<CommandResult> {
   const lat = Number(tokens[0]);
   const lon = Number(tokens[1]);
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
@@ -517,13 +533,17 @@ async function runNearby(env: Env, tokens: string[]): Promise<CommandResult> {
     .slice(0, limit);
 
   return {
-    text: renderNearbyTable(ranked, { lat, lon }),
+    text: renderNearbyTable(ranked, { lat, lon }, tz),
     mapData: rowsToGeoJSON(ranked),
   };
 }
 
 /** `top [--by mag|depth] [filters]` — biggest / deepest quakes on record. */
-async function runTop(env: Env, tokens: string[]): Promise<CommandResult> {
+async function runTop(
+  env: Env,
+  tokens: string[],
+  tz?: string,
+): Promise<CommandResult> {
   const args = parseArgs(
     tokens,
     new Set<OptionKey>(["mag", "since", "location", "limit", "by"]),
@@ -545,7 +565,7 @@ async function runTop(env: Env, tokens: string[]): Promise<CommandResult> {
 
   const rows = results ?? [];
   const heading = bold(`Top ${rows.length} by ${by === "depth" ? "depth" : "magnitude"}`) + EOL + EOL;
-  return { text: heading + renderEarthquakeTable(rows), mapData: rowsToGeoJSON(rows) };
+  return { text: heading + renderEarthquakeTable(rows, tz), mapData: rowsToGeoJSON(rows) };
 }
 
 /** `compare <A> <B>` — side-by-side counts/magnitudes for two location terms. */
@@ -584,7 +604,11 @@ function runRichter(_env: Env, tokens: string[]): CommandResult {
 }
 
 /** `random [filters]` — surface one random quake as a detail card (aka `quake`). */
-async function runRandom(env: Env, tokens: string[]): Promise<CommandResult> {
+async function runRandom(
+  env: Env,
+  tokens: string[],
+  tz?: string,
+): Promise<CommandResult> {
   const args = parseArgs(tokens, new Set<OptionKey>(["mag", "since", "location"]));
   const { clause, binds } = buildWhere(args);
   const row = await env.DB.prepare(
@@ -595,13 +619,17 @@ async function runRandom(env: Env, tokens: string[]): Promise<CommandResult> {
 
   if (!row) return { text: dim("No earthquakes match — nothing to show.") };
   return {
-    text: dim("🎲 Random earthquake") + EOL + EOL + renderEarthquakeDetail(row),
+    text: dim("🎲 Random earthquake") + EOL + EOL + renderEarthquakeDetail(row, tz),
     mapData: rowsToGeoJSON([row]),
   };
 }
 
 /** `felt <id>` — a quake's detail card plus a plain-language impact explainer. */
-async function runFelt(env: Env, tokens: string[]): Promise<CommandResult> {
+async function runFelt(
+  env: Env,
+  tokens: string[],
+  tz?: string,
+): Promise<CommandResult> {
   const id = tokens[0]?.toLowerCase();
   if (!id || !/^[0-9a-f]{16}$/i.test(id)) {
     throw new CommandError("Usage: felt <id>  (a 16-hex earthquake id from list/search)");
@@ -614,7 +642,7 @@ async function runFelt(env: Env, tokens: string[]): Promise<CommandResult> {
 
   if (!row) return { text: color(`No earthquake with id ${id}.`, "red") };
 
-  const detail = renderEarthquakeDetail(row);
+  const detail = renderEarthquakeDetail(row, tz);
   const impact =
     row.magdefault === null
       ? dim("Magnitude unknown — no impact estimate.")
@@ -646,8 +674,9 @@ const BANNER_MAP_ROWS = 100;
  * TerminalHub's welcome frame, so opening the site shows the same summary.
  * The "year" is the newest record's year (falling back to the current UTC year
  * on an empty table), so a stale feed still summarises the latest data.
+ * `tz` localises the summary's timestamps to the viewer's timezone.
  */
-export async function buildBanner(env: Env): Promise<CommandResult> {
+export async function buildBanner(env: Env, tz?: string): Promise<CommandResult> {
   const newest = await env.DB.prepare(
     `SELECT max(utcdatetime) AS last FROM earthquakes`,
   ).first<{ last: string | null }>();
@@ -707,14 +736,14 @@ export async function buildBanner(env: Env): Promise<CommandResult> {
   };
 
   return {
-    text: renderWelcome(summary),
+    text: renderWelcome(summary, tz),
     mapData: rows.length ? rowsToGeoJSON(rows) : undefined,
   };
 }
 
 /** `banner` — the year-at-a-glance welcome screen (aka `about`). */
-function runBanner(env: Env): Promise<CommandResult> {
-  return buildBanner(env);
+function runBanner(env: Env, _tokens: string[], tz?: string): Promise<CommandResult> {
+  return buildBanner(env, tz);
 }
 
 /** `watch [--mag>N] [--location STR]` — subscribe this terminal to matching alerts. */
@@ -771,7 +800,12 @@ interface CommandSpec {
   usage: string;
   summary: string;
   options: OptionDoc[];
-  run: (env: Env, args: string[]) => Promise<CommandResult> | CommandResult;
+  /** `tz` is the connecting browser's IANA timezone (undefined → UTC output). */
+  run: (
+    env: Env,
+    args: string[],
+    tz?: string,
+  ) => Promise<CommandResult> | CommandResult;
 }
 
 /**
@@ -997,6 +1031,7 @@ function helpText(): string {
 export async function executeCommand(
   line: string,
   env: Env,
+  tz?: string,
 ): Promise<CommandResult> {
   const tokens = tokenize(line.trim());
   if (tokens.length === 0) return { text: "" };
@@ -1014,7 +1049,7 @@ export async function executeCommand(
   }
 
   try {
-    return await spec.run(env, args);
+    return await spec.run(env, args, tz);
   } catch (error) {
     if (error instanceof CommandError) {
       return { text: color(`Error: ${error.message}`, "red") };
