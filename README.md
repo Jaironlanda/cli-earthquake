@@ -14,7 +14,7 @@ Durable Objects, and Cron Triggers.
 
 ## Status
 
-Built as a series of independently verifiable phases. **Phases 1–3 are
+Built as a series of independently verifiable phases. **Phases 1–4 are
 complete**; later phases are not built yet.
 
 | Phase | Scope | State |
@@ -22,7 +22,7 @@ complete**; later phases are not built yet.
 | 1 | Data layer — D1 schema + fetch → dedupe → store | ✅ Done |
 | 2 | Cron automation (15-min ingestion) | ✅ Done |
 | 3 | Terminal backend (Durable Object + WebSockets) | ✅ Done |
-| 4 | Terminal frontend (xterm.js) | ⬜ Planned |
+| 4 | Terminal frontend (xterm.js) | ✅ Done |
 | 5 | Real-time alerts | ⬜ Planned |
 | 6 | Map panel (Protomaps + MapLibre) | ⬜ Planned |
 | 7 | Export + polish | ⬜ Planned |
@@ -33,8 +33,8 @@ complete**; later phases are not built yet.
 api.data.gov.my ─fetch─▶ Worker (src/index.ts) ─INSERT OR IGNORE─▶ D1 (earthquakes)
                          POST /admin/ingest + */15 cron                    │
                                                                            │ query
-   browser ◀─WebSocket──▶ TerminalHub (Durable Object) ────────────────────┘
-              /ws           parse command → format ANSI reply
+   xterm.js  ◀─WebSocket──▶ TerminalHub (Durable Object) ──────────────────┘
+   (public/)     /ws          parse command → format ANSI reply
 ```
 
 Each record's primary key is a truncated SHA-256 of `utcdatetime|lat|lon`. The
@@ -48,6 +48,9 @@ idempotent: re-fetching the same feed inserts zero new rows.
 - `src/lib/format.ts` — ANSI colour + fixed-width table/detail renderers (magnitude colour-coded by severity).
 - `src/types.ts` — `Env` + API/row types.
 - `migrations/0001_init.sql` — `earthquakes` table (structured fields only, no raw JSON).
+- `public/index.html` — xterm.js terminal + map-panel shell; loads xterm via CDN (no build step).
+- `public/app.js` — terminal client: opens `/ws`, hand-rolls the prompt/line editor (Enter, backspace, cursor keys, ↑/↓ history, Ctrl+A/E/U/L/C), writes ANSI replies to xterm, auto-reconnects.
+- `public/styles.css` — full-viewport terminal/map split layout with a connection-status indicator.
 
 ### Terminal commands (over `/ws`)
 
@@ -77,6 +80,11 @@ echo 'ADMIN_TOKEN="<some-secret>"' > .dev.vars
 # Run locally
 npm run dev
 ```
+
+Then open **http://localhost:8787** for the terminal UI: type `help`, `list --mag>5`,
+or `search <location>` at the prompt. Backspace, cursor keys, and ↑/↓ command
+history work; magnitude values are colour-coded by severity. (The map panel to the
+right is a placeholder until Phase 6.)
 
 Trigger an ingestion run and inspect the result:
 
