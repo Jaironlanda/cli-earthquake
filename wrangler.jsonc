@@ -5,11 +5,26 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "cf-cli-earthquake",
+	"main": "src/index.ts",
 	"compatibility_date": "2026-07-04",
 	"assets": {
 		// The path to the directory containing the `index.html` file to be served at `/`
-		"directory": "./public"
+		"directory": "./public",
+		// Access static assets from the Worker via env.ASSETS.fetch(request).
+		"binding": "ASSETS",
+		// Invoke the Worker (not the static-asset server) for admin routes.
+		"run_worker_first": ["/admin/*"]
 	},
+	// D1 database holding the `earthquakes` table. `database_id` is filled in
+	// after `wrangler d1 create earthquake-db`.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "earthquake-db",
+			"database_id": "e38869a0-387b-4190-94d9-a20efd96c1d8",
+			"migrations_dir": "migrations"
+		}
+	],
 	"observability": {
 		"enabled": true
 	},
