@@ -147,6 +147,15 @@ function handleServerMessage(msg) {
 			busy = false;
 			newPrompt();
 			break;
+		case "download":
+			// Phase 7: `export` result. xterm.js has no file I/O, so we save the
+			// content client-side via a Blob, then print the confirmation text and
+			// drop a fresh prompt (this frame stands in for the output frame).
+			saveFile(msg.filename, msg.mime, msg.content);
+			term.write("\r\n" + msg.text + "\r\n\r\n");
+			busy = false;
+			newPrompt();
+			break;
 		case "alert":
 			// Real-time push (Phase 5): can arrive at any moment, including
 			// mid-typing. Drop to a fresh line, print the banner, then restore
@@ -162,6 +171,24 @@ function handleServerMessage(msg) {
 			// Unknown future message types are ignored.
 			break;
 	}
+}
+
+/**
+ * Trigger a browser download of `content` (Phase 7). xterm.js can't write
+ * files, so we wrap the text in a Blob, point a hidden <a download> at an object
+ * URL, click it, and revoke the URL afterwards.
+ */
+function saveFile(filename, mime, content) {
+	if (typeof content !== "string") return;
+	const blob = new Blob([content], { type: mime || "application/octet-stream" });
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement("a");
+	a.href = url;
+	a.download = filename || "earthquakes.txt";
+	document.body.appendChild(a);
+	a.click();
+	a.remove();
+	URL.revokeObjectURL(url);
 }
 
 /** Send the completed line to the backend and enter the busy state. */

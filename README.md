@@ -14,8 +14,8 @@ Durable Objects, and Cron Triggers.
 
 ## Status
 
-Built as a series of independently verifiable phases. **Phases 1–6 are
-complete**; the last phase is not built yet.
+Built as a series of independently verifiable phases. **All 7 phases are
+complete.**
 
 | Phase | Scope | State |
 | ----- | ----- | ----- |
@@ -25,7 +25,7 @@ complete**; the last phase is not built yet.
 | 4 | Terminal frontend (xterm.js) | ✅ Done |
 | 5 | Real-time alerts | ✅ Done |
 | 6 | Map panel (Protomaps + MapLibre) | ✅ Done |
-| 7 | Export + polish | ⬜ Planned |
+| 7 | Export (CSV/JSON download) + `trend` chart | ✅ Done |
 
 ## Architecture (current)
 
@@ -55,13 +55,14 @@ idempotent: re-fetching the same feed inserts zero new rows.
 - `src/index.ts` — Worker entry; bearer-guarded `POST /admin/ingest`, `GET /api/config` (Protomaps key), `/ws` → Durable Object, else static assets.
 - `src/lib/ingest.ts` — fetch, `computeId`, batched upsert; returns the actual newly-inserted rows for alert fan-out.
 - `src/durable-objects/terminal-hub.ts` — `TerminalHub` DO: WebSocket Hibernation session hub; `broadcastNewEarthquakes()` RPC fans alerts (with `mapData`) out to every socket.
-- `src/lib/commands.ts` — `executeCommand()`: parses `help` / `list` / `search`, runs parameterized D1 queries, and returns `{text, mapData}`.
-- `src/lib/format.ts` — ANSI colour + fixed-width table/detail renderers (magnitude colour-coded by severity) + `renderAlertBanner()`.
+- `src/lib/commands.ts` — `executeCommand()`: a single command registry drives both dispatch and `help`; parses `help` / `list` / `search` / `export` / `trend`, runs parameterized D1 queries, returns `{text, mapData?, download?}`.
+- `src/lib/format.ts` — ANSI colour + fixed-width table/detail renderers (magnitude colour-coded by severity) + `renderAlertBanner()` + `renderTrend()` (ASCII bar chart).
+- `src/lib/export.ts` — `rowsToCSV()` / `rowsToJSON()`: serialize a result set into downloadable file content (Phase 7).
 - `src/lib/geojson.ts` — `rowsToGeoJSON()`: converts D1 rows into the map panel's Point FeatureCollection.
 - `src/types.ts` — `Env` + API/row types.
 - `migrations/0001_init.sql` — `earthquakes` table (structured fields only, no raw JSON).
 - `public/index.html` — xterm.js terminal + MapLibre map shell; loads xterm, MapLibre GL JS, and the Protomaps basemaps helper via CDN (no build step).
-- `public/app.js` — terminal client: opens `/ws`, hand-rolls the prompt/line editor (Enter, backspace, cursor keys, ↑/↓ history, Ctrl+A/E/U/L/C), writes ANSI replies to xterm, renders pushed `alert` banners without disturbing the current line, forwards `mapData` to the map, auto-reconnects.
+- `public/app.js` — terminal client: opens `/ws`, hand-rolls the prompt/line editor (Enter, backspace, cursor keys, ↑/↓ history, Ctrl+A/E/U/L/C), writes ANSI replies to xterm, renders pushed `alert` banners without disturbing the current line, forwards `mapData` to the map, saves `export` downloads via a Blob, auto-reconnects.
 - `public/map.js` — MapLibre GL JS map; exposes `window.EarthquakeMap.setFeatures()` / `.addFeatures()`, plots magnitude-scaled circles, and picks a Protomaps or dark-canvas basemap from `/api/config`.
 - `public/styles.css` — full-viewport terminal/map split layout with a connection-status indicator and dark-themed map chrome.
 
@@ -69,15 +70,18 @@ idempotent: re-fetching the same feed inserts zero new rows.
 
 The WebSocket speaks JSON: send `{"type":"input","line":"<command>"}`, receive
 `{"type":"output","text":"...ANSI...","mapData":{...GeoJSON}}` (or `welcome` /
-`error`). Server-pushed `{"type":"alert","text":"...","mapData":{...}}` frames
-arrive unsolicited when a cron ingest finds new earthquakes. `mapData` is a
-Point FeatureCollection the browser plots on the map panel.
+`error`). `export` instead returns `{"type":"download","filename","mime","content","text"}`,
+which the browser saves to disk. Server-pushed `{"type":"alert","text":"...","mapData":{...}}`
+frames arrive unsolicited when a cron ingest finds new earthquakes. `mapData` is
+a Point FeatureCollection the browser plots on the map panel.
 
 | Command | Purpose |
 | ------- | ------- |
 | `help` | List available commands. |
 | `list [--mag>N] [--since YYYY-MM-DD] [--location STR] [--limit N]` | Recent earthquakes, newest first. |
 | `search <id \| text>` | 16-hex id → detail view; otherwise location text search. |
+| `export csv\|json [list filters]` | Download the filtered set as a CSV or JSON file. |
+| `trend [--by day\|month] [list filters]` | ASCII bar chart of quake counts per time bucket, coloured by peak magnitude. |
 
 ## Development
 
@@ -98,10 +102,11 @@ npm run dev
 ```
 
 Then open **http://localhost:8787** for the terminal UI: type `help`, `list --mag>5`,
-or `search <location>` at the prompt. Backspace, cursor keys, and ↑/↓ command
-history work; magnitude values are colour-coded by severity. The map panel to the
-right plots the current result set — run `list --mag>6` to see the matching
-circles appear, or `search <location>` to re-centre it.
+`trend --by month`, or `search <location>` at the prompt. Backspace, cursor keys,
+and ↑/↓ command history work; magnitude values are colour-coded by severity. The
+map panel to the right plots the current result set — run `list --mag>6` to see
+the matching circles appear, or `search <location>` to re-centre it. `export csv
+--mag>5` downloads the filtered set as a file.
 
 ### Map basemap (optional)
 

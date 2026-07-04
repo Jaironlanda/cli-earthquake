@@ -11,6 +11,8 @@
  * Protocol (JSON over the socket):
  *   client → server: {"type":"input","line":"list --mag>5"}
  *   server → client: {"type":"output","text":"...ANSI..."}   (command result)
+ *                     {"type":"download","filename","mime","content","text"}
+ *                                                             (Phase 7 export)
  *                     {"type":"error","text":"..."}          (internal failure)
  *                     {"type":"welcome","text":"..."}         (on connect)
  */
@@ -101,8 +103,17 @@ export class TerminalHub extends DurableObject<Env> {
     }
 
     try {
-      const { text, mapData } = await executeCommand(parsed.line, this.env);
-      ws.send(JSON.stringify({ type: "output", text, mapData }));
+      const { text, mapData, download } = await executeCommand(
+        parsed.line,
+        this.env,
+      );
+      // Phase 7: `export` yields a file; the client saves it and prints `text`
+      // as the confirmation. Everything else is a normal ANSI output frame.
+      if (download) {
+        ws.send(JSON.stringify({ type: "download", text, ...download }));
+      } else {
+        ws.send(JSON.stringify({ type: "output", text, mapData }));
+      }
     } catch (error) {
       console.error("Command execution failed:", error);
       ws.send(

@@ -152,6 +152,51 @@ export function renderAlertBanner(rows: EarthquakeRow[]): string {
   return lines.join(EOL);
 }
 
+/** One bucket of the `trend` histogram: a time label, its count, and peak mag. */
+export interface TrendBucket {
+  bucket: string;
+  count: number;
+  maxmag: number | null;
+}
+
+/** Widest bar (in block characters) drawn for the busiest bucket. */
+const TREND_BAR_WIDTH = 40;
+
+/**
+ * Render an ASCII bar chart of earthquake counts per time bucket (Phase 7's
+ * `trend --by day|month`). Buckets arrive oldest-first; each bar is scaled to
+ * the busiest bucket and coloured by that bucket's peak magnitude.
+ */
+export function renderTrend(buckets: TrendBucket[], by: string): string {
+  if (buckets.length === 0) {
+    return dim("No earthquakes match — nothing to chart.");
+  }
+
+  const maxCount = Math.max(...buckets.map((b) => b.count));
+  const labelWidth = Math.max(...buckets.map((b) => b.bucket.length));
+  const countWidth = String(maxCount).length;
+
+  const heading = bold(`Earthquakes per ${by}`);
+
+  const lines = buckets.map((b) => {
+    const label = dim(b.bucket.padEnd(labelWidth));
+    // At least one block for any non-zero bucket so small counts stay visible.
+    const filled = Math.max(1, Math.round((b.count / maxCount) * TREND_BAR_WIDTH));
+    const bar = color("█".repeat(filled), magnitudeColor(b.maxmag));
+    const count = String(b.count).padStart(countWidth);
+    return `${label}  ${bar} ${count}`;
+  });
+
+  const total = buckets.reduce((sum, b) => sum + b.count, 0);
+  const footer = dim(
+    `${total} record${total === 1 ? "" : "s"} across ${buckets.length} ${by}${
+      buckets.length === 1 ? "" : "s"
+    }. Bar colour = peak magnitude.`,
+  );
+
+  return [heading, "", ...lines, "", footer].join(EOL);
+}
+
 /** Render a single earthquake as a detailed key/value block (for `search <id>`). */
 export function renderEarthquakeDetail(row: EarthquakeRow): string {
   const field = (label: string, value: string) =>

@@ -9,10 +9,11 @@ earthquake data from `api.data.gov.my`, built on Cloudflare Workers. The full,
 phased build is described in `planning/implementation-plan.md`; `planning/project-draft.md`
 holds the original spec. Work proceeds one phase at a time, each on its own branch.
 
-**Phases 1 (data layer), 2 (cron automation), 3 (terminal backend), 4
-(xterm.js terminal frontend), 5 (real-time alerts), and 6 (Protomaps/MapLibre
-map panel) are done** — the rest of the plan (Phase 7: export + polish) is not
-built yet.
+**All 7 phases are done**: 1 (data layer), 2 (cron automation), 3 (terminal
+backend), 4 (xterm.js terminal frontend), 5 (real-time alerts), 6
+(Protomaps/MapLibre map panel), and 7 (CSV/JSON export download + `trend` ASCII
+chart + registry-driven help). The build in `planning/implementation-plan.md`
+is complete.
 
 Current code:
 
@@ -32,19 +33,27 @@ Current code:
   Uses the **WebSocket Hibernation API** (`ctx.acceptWebSocket`), so the DO can be
   evicted while sockets stay open (matters for Phase 5 alert fan-out).
   `webSocketMessage()` parses `{type:"input",line}`, calls `executeCommand()`, and
-  replies `{type:"output",text,mapData}` (or `welcome` / `error`). `broadcastNewEarthquakes()`
-  is an RPC method (called by `scheduled()`, not over `.fetch()`) that renders one
-  alert banner and `ws.send`s `{type:"alert",text,mapData}` to every `ctx.getWebSockets()`.
-- `src/lib/commands.ts` — `executeCommand(line, env)`: quote-aware tokenizer, parses
-  `help`, `list [--mag>N] [--since DATE] [--location STR] [--limit N]`,
-  `search <id|text>`, and runs **parameterized** D1 queries. Returns a
-  `CommandResult` (`{text, mapData?}`) — row-returning commands attach `mapData`
-  (Phase 6). User-facing problems return a friendly error string; unexpected errors
-  are re-thrown.
+  replies `{type:"output",text,mapData}` — or, when the result carries a `download`
+  (Phase 7 `export`), `{type:"download",filename,mime,content,text}` — plus `welcome`
+  / `error`. `broadcastNewEarthquakes()` is an RPC method (called by `scheduled()`,
+  not over `.fetch()`) that renders one alert banner and `ws.send`s
+  `{type:"alert",text,mapData}` to every `ctx.getWebSockets()`.
+- `src/lib/commands.ts` — `executeCommand(line, env)`: quote-aware tokenizer + a
+  shared arg parser (`parseArgs`/`buildWhere`), driven by a single **command
+  registry** (`COMMANDS`) that also renders `help` (so help can't drift from the
+  parser). Parses `help`, `list`, `search <id|text>`,
+  `export csv|json [filters]` (Phase 7 — returns a `download` payload, capped at
+  `MAX_EXPORT` = 10k rows), and `trend [--by day|month] [filters]` (Phase 7 —
+  `GROUP BY strftime(...)` → ASCII chart). Runs **parameterized** D1 queries;
+  returns a `CommandResult` (`{text, mapData?, download?}`). User-facing problems
+  return a friendly error string; unexpected errors are re-thrown.
 - `src/lib/format.ts` — ANSI helpers, magnitude→colour severity mapping, and
   fixed-width table + detail renderers. Uses `\r\n` line endings for xterm.js.
   `renderAlertBanner()` formats the Phase 5 push (top-magnitude rows first, capped
-  at 10 with a "…and N more" summary).
+  at 10 with a "…and N more" summary). `renderTrend()` draws the Phase 7 bar chart
+  (bars scaled to the busiest bucket, coloured by peak magnitude).
+- `src/lib/export.ts` — `rowsToCSV()` (RFC-4180 quoting) / `rowsToJSON()` (Phase 7):
+  serialize `EarthquakeRow[]` into downloadable file content. Runtime-agnostic.
 - `src/lib/geojson.ts` — `rowsToGeoJSON()` (Phase 6): converts `EarthquakeRow[]`
   into a Point `FeatureCollection` (props: `id`, `mag`, `depth`, `location`, `time`),
   skipping rows without finite coords. Shared by `commands.ts` and `terminal-hub.ts`.
@@ -63,7 +72,9 @@ Current code:
   (xterm.js has no built-in shell): buffered line with insert-at-cursor, Enter,
   backspace, ←/→, ↑/↓ history (with draft stash), Home/End, Ctrl+A/E/U/L/C. Sends
   `{type:"input",line}`; on `welcome`/`output`/`error` writes the ANSI text back, and
-  forwards any `mapData` to `EarthquakeMap.setFeatures()` (Phase 6).
+  forwards any `mapData` to `EarthquakeMap.setFeatures()` (Phase 6). A
+  `{type:"download"}` frame (Phase 7 `export`) is saved via `saveFile()` (Blob +
+  object URL + hidden `<a download>`), then prints its confirmation text.
   A server-pushed `{type:"alert"}` can arrive at any time: it prints the banner,
   upserts its `mapData` via `EarthquakeMap.addFeatures()`, then re-renders the prompt
   + half-typed line (skipped while `busy`, since the pending reply redraws the prompt
