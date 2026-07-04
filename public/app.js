@@ -204,6 +204,17 @@ function submit() {
 	// De-dupe consecutive identical history entries.
 	if (history[history.length - 1] !== value) history.push(value);
 
+	// `clear`/`cls` is handled locally for an instant, top-anchored redraw with
+	// no round trip (and it works even while disconnected). It's still declared
+	// in the server command registry so `help` documents it; raw ws clients get
+	// the same clear via a returned ANSI sequence.
+	const cmd = value.toLowerCase();
+	if (cmd === "clear" || cmd === "cls") {
+		term.write("\x1b[2J\x1b[3J\x1b[H"); // clear screen + scrollback + home
+		newPrompt();
+		return;
+	}
+
 	if (!ws || ws.readyState !== WebSocket.OPEN) {
 		term.write("\x1b[31mNot connected — command not sent.\x1b[0m\r\n\r\n");
 		newPrompt();

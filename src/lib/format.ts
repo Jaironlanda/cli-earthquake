@@ -117,6 +117,50 @@ export function renderEarthquakeTable(rows: EarthquakeRow[]): string {
   return [headerLine, ...lines, "", footer].join(EOL);
 }
 
+/**
+ * Render the terminal "init screen" shown once on connect (see TerminalHub's
+ * welcome frame): a framed banner with a seismograph trace and wordmark, a short
+ * status readout, and a getting-started hint. Pure ANSI + ASCII (no wide Unicode)
+ * so the box stays aligned in xterm.js at any width.
+ */
+export function renderWelcome(): string {
+  const W = 54; // inner content width, in characters
+  const top = dim("╭" + "─".repeat(W + 2) + "╮");
+  const bot = dim("╰" + "─".repeat(W + 2) + "╯");
+  // Pad the plain content to `W`, then colour it, so the ANSI codes never throw
+  // off the width maths. Each boxed line uses a single colour for its content.
+  const boxLine = (plain: string, paint: (s: string) => string): string =>
+    dim("│ ") + paint(plain.padEnd(W)) + dim(" │");
+
+  const trace = "_/\\".repeat(18); // 54-char seismograph sawtooth
+  const banner = [
+    top,
+    boxLine(trace, (s) => color(s, "gray")),
+    boxLine("", (s) => s),
+    boxLine("    E A R T H Q U A K E   C L I", (s) => bold(color(s, "cyan"))),
+    boxLine("    live seismic data · api.data.gov.my", dim),
+    boxLine("", (s) => s),
+    bot,
+  ];
+
+  const bullet = (label: string, value: string) =>
+    "  " + color("•", "cyan") + " " + dim(label.padEnd(9)) + value;
+  const status = [
+    bullet("feed", "api.data.gov.my — Malaysia MET"),
+    bullet("updates", "every 15 min · real-time alerts on"),
+    bullet("map", "MapLibre + Protomaps side panel"),
+  ];
+
+  const hint =
+    dim("Type ") +
+    bold(color("help", "cyan")) +
+    dim(" for all commands, or ") +
+    bold(color("list", "cyan")) +
+    dim(" for the latest quakes.");
+
+  return [...banner, "", ...status, "", hint].join(EOL);
+}
+
 /** Cap on how many rows a single alert banner enumerates before summarising. */
 const ALERT_MAX_ROWS = 10;
 
