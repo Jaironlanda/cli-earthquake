@@ -25,6 +25,11 @@
 			"migrations_dir": "migrations"
 		}
 	],
+	// Cron: run the ingestion pipeline every 15 minutes (see `scheduled()` in
+	// src/index.ts). Ingestion is idempotent, so runs never duplicate rows.
+	"triggers": {
+		"crons": ["*/15 * * * *"]
+	},
 	"observability": {
 		"enabled": true
 	},
