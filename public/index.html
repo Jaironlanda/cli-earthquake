@@ -22,10 +22,10 @@
 		<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 
 		<!--
-			MapLibre GL JS renders the earthquake map panel (Phase 6); the Protomaps
-			basemaps helper builds the vector-tile style when a key is configured.
-			Both are global builds (window.maplibregl / window.basemaps), matching
-			the project's no-build-step CDN convention.
+			MapLibre GL JS renders the full-screen earthquake map (Phase 6); the
+			Protomaps basemaps helper builds the vector-tile style when a key is
+			configured. Both are global builds (window.maplibregl / window.basemaps),
+			matching the project's no-build-step CDN convention.
 		-->
 		<link
 			rel="stylesheet"
@@ -37,20 +37,158 @@
 		<link rel="stylesheet" href="/styles.css" />
 	</head>
 	<body>
-		<div id="app">
-			<header id="titlebar">
-				<span class="brand">🌏 Earthquake CLI</span>
+		<!-- MapLibre GL mounts here: a full-viewport background layer. -->
+		<div id="map" aria-label="Earthquake map"></div>
+
+		<!--
+			The terminal floats over the map as a Linux-style window: a titlebar
+			with connection status and minimize/maximize controls, draggable when
+			not maximized, semi-transparent so the map shows through.
+		-->
+		<section id="term-window" class="term-window" aria-label="Terminal window">
+			<header id="term-titlebar" class="term-titlebar">
 				<span id="status" class="status status--connecting">
 					<span class="status__dot"></span>
 					<span class="status__label">connecting…</span>
 				</span>
+				<span class="term-titlebar__title">🌏 guest@earthquake: ~</span>
+				<span class="term-titlebar__controls">
+					<button
+						id="term-help"
+						class="term-btn"
+						type="button"
+						title="Help &amp; guide"
+						aria-label="Open the help guide"
+					>
+						?
+					</button>
+					<button
+						id="term-min"
+						class="term-btn"
+						type="button"
+						title="Minimize"
+						aria-label="Minimize terminal"
+					>
+						–
+					</button>
+					<button
+						id="term-max"
+						class="term-btn"
+						type="button"
+						title="Maximize"
+						aria-label="Maximize terminal"
+					>
+						□
+					</button>
+				</span>
 			</header>
-			<main id="split">
-				<!-- xterm.js mounts here -->
-				<section id="terminal" aria-label="Terminal"></section>
-				<!-- MapLibre GL mounts here (Phase 6). -->
-				<section id="map" aria-label="Earthquake map"></section>
-			</main>
+			<!-- xterm.js mounts here -->
+			<div id="terminal" aria-label="Terminal"></div>
+		</section>
+
+		<!-- Dock chip shown while the terminal is minimized; click to restore. -->
+		<button
+			id="term-dock"
+			class="term-dock"
+			type="button"
+			aria-label="Restore terminal"
+		>
+			<span class="term-dock__icon">&gt;_</span> earthquake — terminal
+		</button>
+
+		<!--
+			First-visit guide for non-technical users (also behind the ? button in
+			the terminal titlebar). Closed via ×, Esc, or clicking the backdrop.
+		-->
+		<div id="help-modal" class="help-modal" hidden>
+			<div
+				class="help-modal__card"
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="help-title"
+			>
+				<header class="help-modal__header">
+					<h2 id="help-title">🌏 Earthquake CLI — quick guide</h2>
+					<button
+						id="help-close"
+						class="term-btn"
+						type="button"
+						title="Close"
+						aria-label="Close the help guide"
+					>
+						×
+					</button>
+				</header>
+				<div class="help-modal__body">
+					<h3>What is this?</h3>
+					<p>
+						A live map of recent earthquakes (from Malaysia's meteorological
+						feed, refreshed every 15 minutes). The dark window is a
+						<strong>terminal</strong>: you type a short command, press
+						<code>Enter</code>, and it answers.
+					</p>
+
+					<h3>Try it now</h3>
+					<p>
+						Click inside the terminal, type <code>list</code> and press
+						<code>Enter</code>. The latest quakes are plotted on the map and
+						the terminal tucks itself away so you can see them — click
+						<code>&gt;_ earthquake — terminal</code> in the bottom-left corner
+						to bring it back.
+					</p>
+
+					<h3>Handy commands</h3>
+					<table>
+						<tr>
+							<td><code>help</code></td>
+							<td>every command, with its options</td>
+						</tr>
+						<tr>
+							<td><code>list</code></td>
+							<td>the latest earthquakes, on the map</td>
+						</tr>
+						<tr>
+							<td><code>list --mag&gt;6</code></td>
+							<td>only the big ones (magnitude above 6)</td>
+						</tr>
+						<tr>
+							<td><code>search Indonesia</code></td>
+							<td>quakes whose location mentions a word</td>
+						</tr>
+						<tr>
+							<td><code>nearby 3.14 101.69</code></td>
+							<td>closest quakes to a spot (that's Kuala Lumpur)</td>
+						</tr>
+						<tr>
+							<td><code>stats</code></td>
+							<td>totals, averages, records</td>
+						</tr>
+						<tr>
+							<td><code>watch --mag&gt;5</code></td>
+							<td>get an alert here when a strong quake arrives</td>
+						</tr>
+						<tr>
+							<td><code>export csv</code></td>
+							<td>download the data as a spreadsheet file</td>
+						</tr>
+						<tr>
+							<td><code>richter 7</code></td>
+							<td>what a magnitude actually means</td>
+						</tr>
+					</table>
+
+					<h3>The window</h3>
+					<p>
+						Drag the top bar to move it. <code>–</code> hides it (the map goes
+						full screen), <code>□</code> makes it big, double-clicking the bar
+						does the same, and <code>?</code> reopens this guide.
+					</p>
+					<p class="muted">
+						Tip: commands that show quakes on the map hide the terminal
+						automatically — the bottom-left chip brings it back.
+					</p>
+				</div>
+			</div>
 		</div>
 
 		<script src="/map.js"></script>

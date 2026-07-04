@@ -82,11 +82,14 @@ Current code:
 - `migrations/0001_init.sql` — `earthquakes` table, indexed on `utcdatetime`,
   `magdefault`, `location`. Stores only structured fields (no raw-JSON blob) to keep
   the indefinitely-growing table small.
-- `public/index.html` — xterm.js terminal + MapLibre map shell. Loads `@xterm/xterm`,
-  `@xterm/addon-fit`, `maplibre-gl`, and `@protomaps/basemaps` from a CDN via
-  `<script>` tags (no build step, matching the static-asset convention); loads
-  `public/map.js` (classic script, sets `window.EarthquakeMap`) then `public/app.js`
-  as a module, plus `public/styles.css`.
+- `public/index.html` — full-screen MapLibre map with a floating Linux-style
+  terminal window over it: `#term-window` (titlebar with connection status,
+  help/minimize/maximize buttons, `#terminal` body), a `#term-dock` chip shown
+  while minimized, and a `#help-modal` plain-language guide for non-technical
+  users (opened by the `?` button, auto-shown on first visit). Loads `@xterm/xterm`, `@xterm/addon-fit`, `maplibre-gl`, and
+  `@protomaps/basemaps` from a CDN via `<script>` tags (no build step, matching
+  the static-asset convention); loads `public/map.js` (classic script, sets
+  `window.EarthquakeMap`) then `public/app.js` as a module, plus `public/styles.css`.
 - `public/app.js` — terminal client. Creates a `Terminal` + `FitAddon`, opens the
   `/ws` WebSocket, and **hand-rolls the prompt/line editor** via `term.onData()`
   (xterm.js has no built-in shell): buffered line with insert-at-cursor, Enter,
@@ -99,7 +102,15 @@ Current code:
   upserts its `mapData` via `EarthquakeMap.addFeatures()`, then re-renders the prompt
   + half-typed line (skipped while `busy`, since the pending reply redraws the prompt
   itself). A `busy` flag gates input while a command is in flight; auto-reconnects
-  with backoff (welcome only greets once).
+  with backoff (welcome only greets once). The terminal runs with
+  `allowTransparency` + a transparent theme background (the translucent glass is
+  CSS on `.term-window`), refits via a `ResizeObserver`, and a window-manager
+  block wires minimize (→ dock chip, which pulses if an alert arrives while
+  minimized), maximize/restore (button or titlebar double-click), and
+  titlebar-drag with viewport clamping. Commands whose reply carries map
+  features auto-minimize the window so the plot is visible. The help modal is
+  wired to the `?` button, ×/Esc/backdrop close, and a `localStorage`
+  first-visit flag (`eq-guide-seen`).
 - `public/map.js` — MapLibre GL JS map (Phase 6). Fetches `/api/config`; if a
   `protomapsKey` is present it builds the Protomaps dark vector style via the
   `basemaps` helper, else falls back to a plain dark-background style so points still
@@ -107,9 +118,13 @@ Current code:
   `format.ts`). Exposes `window.EarthquakeMap.setFeatures(fc)` (replace + fit bounds)
   and `.addFeatures(fc)` (upsert by id, for alerts); both queue until the map's
   `load` fires. Hover popups show magnitude/location/time.
-- `public/styles.css` — full-viewport flex split (terminal | MapLibre map) plus a
-  title-bar connection-status indicator and dark-themed map chrome/popups; stacks
-  vertically under 800px.
+- `public/styles.css` — full-viewport map layer with the floating terminal
+  window on top, anchored bottom-center by default: translucent glass
+  background (`rgba` + `backdrop-filter` blur) so the map shows through,
+  `.maximized` (pins to viewport edges) and `.minimized` (hidden; dock chip
+  visible) states, titlebar/window-button styling, the connection-status dot,
+  the `#help-modal` guide card, dark-themed map chrome/popups, and a
+  near-fullscreen window under 700px.
 
 Bindings in `wrangler.jsonc`: `ASSETS` (static assets,
 `run_worker_first: ["/admin/*", "/ws", "/api/*"]`), `DB` (D1 database `earthquake-db`),
