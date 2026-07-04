@@ -157,6 +157,7 @@ export function renderWelcome(summary?: YearSummary): string {
     boxLine("", (s) => s),
     boxLine("    E A R T H Q U A K E   C L I", (s) => bold(color(s, "cyan"))),
     boxLine("    live seismic data · api.data.gov.my", dim),
+    boxLine("    by Jairon Landa · https://github.com/Jaironlanda", dim),
     boxLine("", (s) => s),
     bot,
   ];
