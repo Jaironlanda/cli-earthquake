@@ -9,7 +9,7 @@
  * ({welcome|output|error}) carry ANSI, which xterm renders natively via write().
  */
 
-/* global Terminal, FitAddon */
+/* global Terminal, FitAddon, WebLinksAddon */
 
 const PROMPT = "\x1b[1;36mearthquake\x1b[0m \x1b[2m$\x1b[0m ";
 
@@ -33,6 +33,8 @@ const term = new Terminal({
 
 const fitAddon = new FitAddon.FitAddon();
 term.loadAddon(fitAddon);
+// Makes URLs in terminal output (e.g. the banner's author link) clickable.
+term.loadAddon(new WebLinksAddon.WebLinksAddon());
 term.open(document.getElementById("terminal"));
 fitAddon.fit();
 
@@ -445,7 +447,7 @@ dockEl.addEventListener("click", restoreFromDock);
 // Double-click the titlebar (not its buttons) to toggle maximize, like most
 // Linux window managers.
 titlebarEl.addEventListener("dblclick", (e) => {
-	if (e.target.closest("button")) return;
+	if (e.target.closest("button, a")) return;
 	setMaximized(!isMaximized());
 });
 
@@ -472,7 +474,7 @@ window.addEventListener("resize", () => {
 });
 
 titlebarEl.addEventListener("pointerdown", (e) => {
-	if (e.target.closest("button") || isMaximized()) return;
+	if (e.target.closest("button, a") || isMaximized()) return;
 	const rect = winEl.getBoundingClientRect();
 	drag = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
 	winEl.style.left = `${rect.left}px`;
