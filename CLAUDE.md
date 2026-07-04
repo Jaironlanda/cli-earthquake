@@ -26,8 +26,11 @@ Current code:
 
 - `src/index.ts` — Worker entry (`fetch` + `scheduled`). Routes `POST /admin/ingest`
   (bearer-guarded by `ADMIN_TOKEN`) through the ingestion pipeline; `GET /api/config`
-  returns `{protomapsKey}` (Phase 6) for the browser map; routes `/ws`
-  (WebSocket upgrade) to the single `TerminalHub` DO (`getByName("global-hub")`);
+  returns `{protomapsKey}` (Phase 6) for the browser map (edge-cached an hour via
+  `Cache-Control` so repeat page loads skip the Worker); routes `/ws`
+  (WebSocket upgrade) to the single `TerminalHub` DO (`getByName("global-hub")`),
+  after throttling connection attempts per client IP through the `WS_CONNECT_LIMIT`
+  rate-limit binding (429 when exceeded);
   everything else falls through to `env.ASSETS.fetch(request)` (static assets in
   `public/`). Also re-exports `TerminalHub` so the runtime can instantiate it. The
   `scheduled()` cron handler runs the same idempotent pipeline every 15 minutes.
@@ -39,14 +42,19 @@ Current code:
 - `src/durable-objects/terminal-hub.ts` — `TerminalHub extends DurableObject<Env>`.
   Uses the **WebSocket Hibernation API** (`ctx.acceptWebSocket`), so the DO can be
   evicted while sockets stay open (matters for Phase 5 alert fan-out).
-  `webSocketMessage()` parses `{type:"input",line}`, calls `executeCommand()`, and
+  `webSocketMessage()` first applies a **hibernation-safe per-socket command
+  throttle** (fixed window, `RATE_MAX` inputs per `RATE_WINDOW_MS`; over-limit
+  frames get a friendly `error` and are dropped), then parses `{type:"input",line}`,
+  calls `executeCommand()`, and
   replies `{type:"output",text,mapData}` — or, when the result carries a `download`
   (Phase 7 `export`), `{type:"download",filename,mime,content,text}` — plus `welcome`
-  / `error`. A `CommandResult.watch` directive (Phase 8) is stored on the socket via
-  `ws.serializeAttachment()` (filter object) / cleared with `null`.
+  / `error`. Per-socket state (the Phase 8 `CommandResult.watch` filter **and** the
+  throttle counter) lives in one `SocketState` object persisted via
+  `ws.serializeAttachment()` (`readSocketState`/`writeSocketState` helpers tolerate
+  the legacy bare-filter attachment), so both survive DO hibernation.
   `broadcastNewEarthquakes()` is an RPC method (called by `scheduled()`, not over
   `.fetch()`) that fans an alert to every `ctx.getWebSockets()`; per socket it reads
-  the stored `watch` filter (`deserializeAttachment()`), skips or narrows the record
+  the stored `watch` filter (`readSocketState()`), skips or narrows the record
   set to matches, and sends `{type:"alert",text,mapData,bell}` (`bell` set when peak
   magnitude ≥ 5, Phase 8).
 - `src/lib/commands.ts` — `executeCommand(line, env)`: quote-aware tokenizer + a
@@ -77,8 +85,8 @@ Current code:
 - `src/lib/geojson.ts` — `rowsToGeoJSON()` (Phase 6): converts `EarthquakeRow[]`
   into a Point `FeatureCollection` (props: `id`, `mag`, `depth`, `location`, `time`),
   skipping rows without finite coords. Shared by `commands.ts` and `terminal-hub.ts`.
-- `src/types.ts` — `Env` bindings (incl. `TERMINAL_HUB`, `PROTOMAPS_KEY`) +
-  `EarthquakeApiRecord` / `EarthquakeRow`.
+- `src/types.ts` — `Env` bindings (incl. `TERMINAL_HUB`, `PROTOMAPS_KEY`,
+  `WS_CONNECT_LIMIT`) + `EarthquakeApiRecord` / `EarthquakeRow`.
 - `migrations/0001_init.sql` — `earthquakes` table, indexed on `utcdatetime`,
   `magdefault`, `location`. Stores only structured fields (no raw-JSON blob) to keep
   the indefinitely-growing table small.
@@ -133,8 +141,10 @@ Current code:
 Bindings in `wrangler.jsonc`: `ASSETS` (static assets,
 `run_worker_first: ["/admin/*", "/ws", "/api/*"]`), `DB` (D1 database `earthquake-db`),
 `TERMINAL_HUB` (Durable Object → `TerminalHub`; `migrations` tag `v1`,
-`new_sqlite_classes: ["TerminalHub"]`), and a `PROTOMAPS_KEY` var (empty by default;
-publishable basemap key served to the browser via `/api/config`);
+`new_sqlite_classes: ["TerminalHub"]`), a `PROTOMAPS_KEY` var (empty by default;
+publishable basemap key served to the browser via `/api/config`), and a
+`WS_CONNECT_LIMIT` rate-limit binding (`ratelimits`, per-IP `/ws` connection
+throttle — 60/60s by default);
 `triggers.crons: ["*/15 * * * *"]` drives the `scheduled()` handler.
 
 ## Commands

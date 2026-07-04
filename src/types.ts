@@ -8,6 +8,11 @@ export interface Env {
   ASSETS: Fetcher;
   /** D1 database holding the `earthquakes` table. */
   DB: D1Database;
+  /**
+   * Per-IP rate limiter for /ws connection attempts (spam/DDoS mitigation).
+   * `RateLimit` is a runtime-provided global (see `ratelimits` in wrangler.jsonc).
+   */
+  WS_CONNECT_LIMIT: RateLimit;
   /** Bearer token guarding /admin/* routes. Set via `wrangler secret put ADMIN_TOKEN`. */
   ADMIN_TOKEN: string;
   /** Durable Object namespace for the WebSocket terminal hub (Phase 3). */
