@@ -17,7 +17,10 @@ is complete.
 
 **Phase 8 (post-plan, "fun & useful" commands)** extended the same registry with
 `stats`, `sparkline`, `top`, `nearby <lat> <lon>`, `minimap`, `compare A B`,
-`richter <mag>`, `felt <id>`, `random`, and `banner`, plus per-terminal alert
+`richter <mag>`, `felt <id>`, `random`, and `banner` (a D1-backed
+year-at-a-glance summary — total / mag-5+ count / strongest / latest / avg mag /
+monthly sparkline — that doubles as the on-connect welcome frame, whose
+`mapData` plots the year's newest quakes on page open), plus per-terminal alert
 filtering: `watch [--mag>N] [--location STR]` / `unwatch` store a filter on the
 WebSocket (`serializeAttachment`, survives hibernation) so alerts fan out only to
 matching sockets, and significant alerts (≥ mag 5) ring the terminal bell (`\x07`).
@@ -48,7 +51,10 @@ Current code:
   calls `executeCommand()`, and
   replies `{type:"output",text,mapData}` — or, when the result carries a `download`
   (Phase 7 `export`), `{type:"download",filename,mime,content,text}` — plus `welcome`
-  / `error`. Per-socket state (the Phase 8 `CommandResult.watch` filter **and** the
+  / `error`. The `welcome` frame is `buildBanner()` (the `banner` command's year
+  summary) with its `mapData` attached, so the map shows markers as soon as the
+  site opens; a D1 failure falls back to the static `renderWelcome()`.
+  Per-socket state (the Phase 8 `CommandResult.watch` filter **and** the
   throttle counter) lives in one `SocketState` object persisted via
   `ws.serializeAttachment()` (`readSocketState`/`writeSocketState` helpers tolerate
   the legacy bare-filter attachment), so both survive DO hibernation.
@@ -68,7 +74,10 @@ Current code:
   same `parseArgs`/`buildWhere` machinery; `nearby` bounding-boxes in SQL then
   refines with a JS haversine) plus `watch`/`unwatch`, which return a
   `CommandResult.watch` directive; `matchesWatch(row, filter)` (exported, unit-tested)
-  is the shared filter predicate the DO reuses at broadcast time. Runs
+  is the shared filter predicate the DO reuses at broadcast time. `buildBanner(env)`
+  (exported) assembles the `banner` year summary (aggregates + strongest/latest +
+  monthly buckets + up to `BANNER_MAP_ROWS` newest rows as map data); the year is
+  the newest record's, falling back to the current UTC year. Runs
   **parameterized** D1 queries; returns a `CommandResult`
   (`{text, mapData?, download?, watch?}`). User-facing problems return a friendly
   error string; unexpected errors are re-thrown.
@@ -79,7 +88,9 @@ Current code:
   (bars scaled to the busiest bucket, coloured by peak magnitude). Phase 8 renderers:
   `renderStats`, `renderNearbyTable`, `renderRichter` (severity band + TNT-energy
   readout), `renderSparkline` (Unicode `▁▂▃▅▇` ramp), `renderMinimap` (ASCII lat/lon
-  grid auto-fit to the data bounds), and `renderCompare`.
+  grid auto-fit to the data bounds), and `renderCompare`. `renderWelcome(summary?)`
+  takes an optional `YearSummary` and renders the year-at-a-glance block into the
+  init screen.
 - `src/lib/export.ts` — `rowsToCSV()` (RFC-4180 quoting) / `rowsToJSON()` (Phase 7):
   serialize `EarthquakeRow[]` into downloadable file content. Runtime-agnostic.
 - `src/lib/geojson.ts` — `rowsToGeoJSON()` (Phase 6): converts `EarthquakeRow[]`

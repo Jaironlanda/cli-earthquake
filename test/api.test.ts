@@ -65,6 +65,17 @@ describe("/ws terminal round-trip", () => {
     await seedRows();
   });
 
+  it("greets with the year banner and its map markers", async () => {
+    const term = await openTerminal();
+    const welcome = await term.recv((f) => f.type === "welcome");
+    expect(welcome.text).toContain("at a glance");
+    // The year's quakes ride along so the map plots markers on page open.
+    expect(
+      (welcome.mapData as { features: unknown[] } | undefined)?.features,
+    ).toHaveLength(3);
+    term.close();
+  });
+
   it("runs `help` and returns an output frame", async () => {
     const term = await openTerminal();
     term.send("help");

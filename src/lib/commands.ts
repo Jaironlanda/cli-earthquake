@@ -36,6 +36,7 @@ import {
   type QuakeStats,
   type RowWithDistance,
   type TrendBucket,
+  type YearSummary,
 } from "./format";
 import { rowsToGeoJSON, type EarthquakeFeatureCollection } from "./geojson";
 import { rowsToCSV, rowsToJSON } from "./export";
@@ -635,9 +636,85 @@ async function runMinimap(env: Env, tokens: string[]): Promise<CommandResult> {
   return { text: renderMinimap(rows), mapData: rowsToGeoJSON(rows) };
 }
 
-/** `banner` — reprint the welcome/init screen (aka `about`). */
-function runBanner(): CommandResult {
-  return { text: renderWelcome() };
+/** Newest rows the `banner` year summary plots on the map. */
+const BANNER_MAP_ROWS = 100;
+
+/**
+ * Build the year-at-a-glance banner: the welcome art plus this year's headline
+ * figures (total, strongest, latest, monthly trend), with the year's newest
+ * rows attached as map data. Shared by the `banner` command and the
+ * TerminalHub's welcome frame, so opening the site shows the same summary.
+ * The "year" is the newest record's year (falling back to the current UTC year
+ * on an empty table), so a stale feed still summarises the latest data.
+ */
+export async function buildBanner(env: Env): Promise<CommandResult> {
+  const newest = await env.DB.prepare(
+    `SELECT max(utcdatetime) AS last FROM earthquakes`,
+  ).first<{ last: string | null }>();
+  const year = (newest?.last ?? new Date().toISOString()).slice(0, 4);
+  const since = `${year}-01-01`;
+
+  const agg = await env.DB.prepare(
+    `SELECT count(*) AS total,
+            max(magdefault) AS maxmag,
+            avg(magdefault) AS avgmag,
+            sum(CASE WHEN magdefault >= 5 THEN 1 ELSE 0 END) AS significant
+       FROM earthquakes WHERE utcdatetime >= ?`,
+  )
+    .bind(since)
+    .first<{
+      total: number;
+      maxmag: number | null;
+      avgmag: number | null;
+      significant: number | null;
+    }>();
+  const total = agg?.total ?? 0;
+
+  let rows: EarthquakeRow[] = [];
+  let strongest: EarthquakeRow | null = null;
+  let months: TrendBucket[] = [];
+  if (total > 0) {
+    rows = await queryRows(env, { since }, BANNER_MAP_ROWS);
+    strongest =
+      (await env.DB.prepare(
+        `SELECT ${ROW_COLUMNS} FROM earthquakes
+           WHERE utcdatetime >= ?
+           ORDER BY magdefault DESC NULLS LAST LIMIT 1`,
+      )
+        .bind(since)
+        .first<EarthquakeRow>()) ?? null;
+    const { results } = await env.DB.prepare(
+      `SELECT strftime('%Y-%m', utcdatetime) AS bucket,
+              count(*) AS count,
+              max(magdefault) AS maxmag
+         FROM earthquakes WHERE utcdatetime >= ?
+         GROUP BY bucket ORDER BY bucket`,
+    )
+      .bind(since)
+      .all<TrendBucket>();
+    months = results ?? [];
+  }
+
+  const summary: YearSummary = {
+    year,
+    total,
+    maxmag: agg?.maxmag ?? null,
+    avgmag: agg?.avgmag ?? null,
+    significant: agg?.significant ?? 0,
+    latest: rows[0] ?? null,
+    strongest,
+    months,
+  };
+
+  return {
+    text: renderWelcome(summary),
+    mapData: rows.length ? rowsToGeoJSON(rows) : undefined,
+  };
+}
+
+/** `banner` — the year-at-a-glance welcome screen (aka `about`). */
+function runBanner(env: Env): Promise<CommandResult> {
+  return buildBanner(env);
 }
 
 /** `watch [--mag>N] [--location STR]` — subscribe this terminal to matching alerts. */
@@ -880,7 +957,7 @@ const COMMANDS: CommandSpec[] = [
     name: "banner",
     aliases: ["about"],
     usage: "banner",
-    summary: "Reprint the welcome / about screen.",
+    summary: "Year-at-a-glance summary (also shown on connect).",
     options: [],
     run: runBanner,
   },

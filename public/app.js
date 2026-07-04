@@ -144,6 +144,9 @@ function handleServerMessage(msg) {
 			if (greeted) return;
 			greeted = true;
 			term.write(msg.text + "\r\n\r\n");
+			// The welcome banner carries this year's quakes as GeoJSON, so the
+			// map shows markers as soon as the site opens.
+			if (msg.mapData) window.EarthquakeMap?.setFeatures(msg.mapData);
 			newPrompt();
 			break;
 		case "output":
