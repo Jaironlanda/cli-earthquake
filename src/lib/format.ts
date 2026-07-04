@@ -148,7 +148,7 @@ export function renderWelcome(): string {
   const status = [
     bullet("feed", "api.data.gov.my — Malaysia MET"),
     bullet("updates", "every 15 min · real-time alerts on"),
-    bullet("map", "MapLibre + Protomaps side panel"),
+    bullet("map", "MapLibre + Protomaps"),
   ];
 
   const hint =
