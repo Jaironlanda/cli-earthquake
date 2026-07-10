@@ -357,9 +357,13 @@ export class TerminalHub extends DurableObject<Env> {
     reason: string,
     _wasClean: boolean,
   ): Promise<void> {
-    // 1005 = "no status received"; passing it back to close() is invalid, so
-    // fall back to a normal-closure code.
-    ws.close(code === 1005 ? 1000 : code, reason);
+    // The reserved codes 1005 ("no status received"), 1006 ("abnormal
+    // closure"), and 1015 ("TLS handshake") are set by the runtime but can't
+    // be passed back to close() — doing so throws "Invalid WebSocket close
+    // code". Only echo a code the spec allows us to send; otherwise fall back
+    // to a normal closure.
+    const sendable = code >= 1000 && code <= 4999 && ![1004, 1005, 1006, 1015].includes(code);
+    ws.close(sendable ? code : 1000, reason);
   }
 
   /** Log transport errors; the runtime closes the socket for us. */
