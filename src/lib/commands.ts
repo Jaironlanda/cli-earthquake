@@ -516,14 +516,38 @@ async function runNearby(
   const latPad = radius / 111;
   const lonPad = radius / (111 * Math.max(0.01, Math.cos((lat * Math.PI) / 180)));
   const box = buildWhere(args);
-  const clause =
-    (box.clause ? box.clause + " AND " : "WHERE ") +
-    "lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?";
+
+  // Assemble the WHERE conditions in bind order: caller filters, then the
+  // latitude band (clamped to the poles), then the longitude band. The
+  // longitude band needs care near ±180°: a box that runs off the edge wraps
+  // the antimeridian, so it becomes an OR of two ranges; a pad ≥ 180° covers
+  // every longitude, so we drop the constraint entirely.
+  const conds: string[] = [...(box.clause ? [box.clause.slice("WHERE ".length)] : [])];
+  const binds: unknown[] = [...box.binds];
+
+  conds.push("lat BETWEEN ? AND ?");
+  binds.push(Math.max(-90, lat - latPad), Math.min(90, lat + latPad));
+
+  if (lonPad < 180) {
+    const lonLo = lon - lonPad;
+    const lonHi = lon + lonPad;
+    if (lonLo < -180 || lonHi > 180) {
+      // Wrapped: normalise both edges into [-180, 180] and match either side.
+      const wrap = (x: number) => ((x + 540) % 360) - 180;
+      conds.push("(lon >= ? OR lon <= ?)");
+      binds.push(wrap(lonLo), wrap(lonHi));
+    } else {
+      conds.push("lon BETWEEN ? AND ?");
+      binds.push(lonLo, lonHi);
+    }
+  }
+
   const { results } = await env.DB.prepare(
-    `SELECT ${ROW_COLUMNS} FROM earthquakes ${clause}
+    `SELECT ${ROW_COLUMNS} FROM earthquakes
+       WHERE ${conds.join(" AND ")}
        ORDER BY utcdatetime DESC LIMIT ?`,
   )
-    .bind(...box.binds, lat - latPad, lat + latPad, lon - lonPad, lon + lonPad, NEARBY_CANDIDATES)
+    .bind(...binds, NEARBY_CANDIDATES)
     .all<EarthquakeRow>();
 
   const ranked: RowWithDistance[] = (results ?? [])
@@ -668,15 +692,26 @@ async function runMinimap(env: Env, tokens: string[]): Promise<CommandResult> {
 const BANNER_MAP_ROWS = 100;
 
 /**
- * Build the year-at-a-glance banner: the welcome art plus this year's headline
- * figures (total, strongest, latest, monthly trend), with the year's newest
- * rows attached as map data. Shared by the `banner` command and the
- * TerminalHub's welcome frame, so opening the site shows the same summary.
+ * The tz-independent result of the year-at-a-glance query set: the aggregate
+ * summary plus the map data. Separated from rendering so the TerminalHub can
+ * cache it once per ingest window and re-render the text per viewer timezone
+ * (the D1 reads — the expensive part — don't depend on `tz`).
+ */
+export interface YearSummaryData {
+  summary: YearSummary;
+  mapData?: EarthquakeFeatureCollection;
+}
+
+/**
+ * Run the year-at-a-glance query set (total / strongest / latest / monthly
+ * trend + the year's newest rows as map data). This is the expensive part of
+ * the welcome banner — several D1 aggregates over the current year — and is
+ * timezone-independent, so callers can compute it once and cache it, rendering
+ * the localised text separately with {@link renderWelcome}.
  * The "year" is the newest record's year (falling back to the current UTC year
  * on an empty table), so a stale feed still summarises the latest data.
- * `tz` localises the summary's timestamps to the viewer's timezone.
  */
-export async function buildBanner(env: Env, tz?: string): Promise<CommandResult> {
+export async function computeYearSummary(env: Env): Promise<YearSummaryData> {
   const newest = await env.DB.prepare(
     `SELECT max(utcdatetime) AS last FROM earthquakes`,
   ).first<{ last: string | null }>();
@@ -736,9 +771,20 @@ export async function buildBanner(env: Env, tz?: string): Promise<CommandResult>
   };
 
   return {
-    text: renderWelcome(summary, tz),
+    summary,
     mapData: rows.length ? rowsToGeoJSON(rows) : undefined,
   };
+}
+
+/**
+ * Build the rendered year-at-a-glance banner: {@link computeYearSummary} plus
+ * `renderWelcome`. Shared by the `banner` command and the TerminalHub's welcome
+ * fallback, so opening the site shows the same summary. `tz` localises the
+ * summary's timestamps to the viewer's timezone.
+ */
+export async function buildBanner(env: Env, tz?: string): Promise<CommandResult> {
+  const { summary, mapData } = await computeYearSummary(env);
+  return { text: renderWelcome(summary, tz), mapData };
 }
 
 /** `banner` — the year-at-a-glance welcome screen (aka `about`). */
