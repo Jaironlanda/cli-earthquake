@@ -243,6 +243,27 @@ a.term-btn {
 
 #terminal .xterm-viewport {
 	background: transparent !important;
+	/* Firefox: thin, theme-coloured scrollbar instead of the default white one. */
+	scrollbar-width: thin;
+	scrollbar-color: rgba(53, 193, 232, 0.35) transparent;
+}
+
+/* WebKit/Blink: replace the opaque white native scrollbar with a subtle glass one. */
+#terminal .xterm-viewport::-webkit-scrollbar {
+	width: 8px;
+}
+
+#terminal .xterm-viewport::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+#terminal .xterm-viewport::-webkit-scrollbar-thumb {
+	background: rgba(53, 193, 232, 0.35);
+	border-radius: 4px;
+}
+
+#terminal .xterm-viewport::-webkit-scrollbar-thumb:hover {
+	background: rgba(53, 193, 232, 0.55);
 }
 
 /* --- Dock chip (minimized state) --------------------------------------------- */
