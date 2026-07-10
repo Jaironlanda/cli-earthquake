@@ -9,8 +9,8 @@
  * itself is unit-tested in `ingest.test.ts`.
  */
 import { SELF, env } from "cloudflare:test";
-import { beforeAll, describe, expect, it } from "vitest";
-import { openTerminal, seedRows } from "./helpers";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { openTerminal, seedRows, SAMPLE_ROWS } from "./helpers";
 import type { EarthquakeRow } from "../src/types";
 
 const BASE = "https://example.com";
@@ -177,5 +177,46 @@ describe("real-time alerts + watch filtering (Phase 8)", () => {
 
     plain.close();
     watcher.close();
+  });
+});
+
+describe("welcome banner reflects data added out-of-band (cache)", () => {
+  beforeAll(async () => {
+    await seedRows();
+  });
+  afterAll(async () => {
+    await seedRows();
+  });
+
+  it("a later connection sees a row added after an earlier one", async () => {
+    const first = await openTerminal();
+    const w1 = await first.recv((f) => f.type === "welcome");
+    expect((w1.mapData as { features: unknown[] }).features).toHaveLength(3);
+    first.close();
+
+    // A row enters D1 by a path that never calls broadcastNewEarthquakes (as
+    // the admin ingest route or a manual write would). The cached banner must
+    // still refresh — the DO validates its cache against a table fingerprint.
+    await seedRows([
+      ...SAMPLE_ROWS,
+      {
+        id: "ffff000000000006",
+        utcdatetime: "2026-07-05T00:00:00",
+        localdatetime: null,
+        lat: 2.0,
+        lon: 100.0,
+        depth: 10,
+        location: "Riau, Indonesia",
+        location_original: "Riau",
+        magdefault: 4.5,
+        magtypedefault: "mb",
+        status: "NORMAL",
+      },
+    ]);
+
+    const second = await openTerminal();
+    const w2 = await second.recv((f) => f.type === "welcome");
+    expect((w2.mapData as { features: unknown[] }).features).toHaveLength(4);
+    second.close();
   });
 });

@@ -46,7 +46,10 @@ Current code:
   `public/`). Also re-exports `TerminalHub` so the runtime can instantiate it. The
   `scheduled()` cron handler runs the same idempotent pipeline every 15 minutes.
 - `src/lib/ingest.ts` — `computeId()` (truncated SHA-256 of `utcdatetime|lat|lon`,
-  giving each record a stable id since the API has none), `fetchLatestEarthquakes()`,
+  giving each record a stable id since the API has none; lat/lon are normalised
+  through `Number()` so a formatting-only feed change can't duplicate an event),
+  `fetchLatestEarthquakes()` (bounded by an `AbortSignal.timeout` so a hung
+  upstream can't stall the cron),
   `upsertEarthquakes()` (batched `INSERT OR IGNORE` → idempotent ingestion). Returns
   `insertedRows` (the actually-new rows, keyed off each statement's `meta.changes`)
   so Phase 5 can broadcast them.
@@ -59,9 +62,14 @@ Current code:
   calls `executeCommand()`, and
   replies `{type:"output",text,mapData}` — or, when the result carries a `download`
   (Phase 7 `export`), `{type:"download",filename,mime,content,text}` — plus `welcome`
-  / `error`. The `welcome` frame is `buildBanner()` (the `banner` command's year
-  summary) with its `mapData` attached, so the map shows markers as soon as the
-  site opens; a D1 failure falls back to the static `renderWelcome()`.
+  / `error`. The `welcome` frame is the `banner` year summary with its `mapData`
+  attached, so the map shows markers as soon as the site opens; a D1 failure
+  falls back to the static `renderWelcome()`. To keep the aggregate query set off
+  every connection, the DO caches the tz-independent `computeYearSummary()` result
+  (`getWelcomeSummary()`) and only re-renders the localised text per socket;
+  the cache is validated against a cheap `max(rowid)`/`max(utcdatetime)` table
+  fingerprint, so it self-refreshes whenever rows land (cron, admin, or manual)
+  without coupling to the broadcast path.
   Per-socket state (the Phase 8 `CommandResult.watch` filter, the
   throttle counter, **and** the viewer's `tz` from the `?tz=` connect param)
   lives in one `SocketState` object persisted via
@@ -81,16 +89,20 @@ Current code:
   `MAX_EXPORT` = 10k rows), and `trend [--by day|month] [filters]` (Phase 7 —
   `GROUP BY strftime(...)` → ASCII chart). Phase 8 added `stats`/`sparkline`/`top`/
   `nearby`/`minimap`/`compare`/`richter`/`felt`/`random`/`banner` (all through the
-  same `parseArgs`/`buildWhere` machinery; `nearby` bounding-boxes in SQL then
-  refines with a JS haversine) plus `watch`/`unwatch`, which return a
+  same `parseArgs`/`buildWhere` machinery; `nearby` bounding-boxes in SQL —
+  clamping latitude at the poles and splitting the longitude band into an OR of
+  two ranges when it wraps ±180° — then refines with a JS haversine) plus
+  `watch`/`unwatch`, which return a
   `CommandResult.watch` directive; `matchesWatch(row, filter)` (exported, unit-tested)
   is the shared filter predicate the DO reuses at broadcast time.
   `executeCommand(line, env, tz?)` threads the viewer's timezone into the
   registry handlers (`run(env, args, tz?)`) so time-rendering commands localise
-  their output. `buildBanner(env, tz?)`
-  (exported) assembles the `banner` year summary (aggregates + strongest/latest +
-  monthly buckets + up to `BANNER_MAP_ROWS` newest rows as map data); the year is
-  the newest record's, falling back to the current UTC year. Runs
+  their output. `computeYearSummary(env)`
+  (exported) runs the tz-independent `banner` query set (aggregates +
+  strongest/latest + monthly buckets + up to `BANNER_MAP_ROWS` newest rows as map
+  data; the year is the newest record's, falling back to the current UTC year),
+  and `buildBanner(env, tz?)` renders it via `renderWelcome`; the DO caches the
+  `computeYearSummary` result so the query set isn't re-run per connection. Runs
   **parameterized** D1 queries; returns a `CommandResult`
   (`{text, mapData?, download?, watch?}`). User-facing problems return a friendly
   error string; unexpected errors are re-thrown.

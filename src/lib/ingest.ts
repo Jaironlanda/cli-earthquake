@@ -15,17 +15,23 @@ const ID_HEX_LENGTH = 16;
 /** D1's per-batch statement cap is 1,000 (free) / 10,000 (paid). Stay well under. */
 const BATCH_SIZE = 500;
 
+/** Give up on the upstream feed after this long so a hung request can't stall the cron. */
+const FETCH_TIMEOUT_MS = 10_000;
+
 /**
  * Derive a stable id for a record from its natural key (`utcdatetime|lat|lon`).
  * The upstream API has no id field, so the same physical event always hashes to
- * the same id, making ingestion idempotent.
+ * the same id, making ingestion idempotent. Coordinates are normalised through
+ * `Number()` first, so a formatting-only change from the feed (e.g. "5.50" vs
+ * `5.5`, or a stray `-0`) still maps the same event to the same id rather than
+ * duplicating it. For the feed's numeric coordinates this is a no-op.
  */
 export async function computeId(
   utcdatetime: string,
   lat: number,
   lon: number,
 ): Promise<string> {
-  const key = `${utcdatetime}|${lat}|${lon}`;
+  const key = `${utcdatetime}|${Number(lat)}|${Number(lon)}`;
   const data = new TextEncoder().encode(key);
   const digest = await crypto.subtle.digest("SHA-256", data);
   const hex = Array.from(new Uint8Array(digest))
@@ -38,6 +44,9 @@ export async function computeId(
 export async function fetchLatestEarthquakes(): Promise<EarthquakeApiRecord[]> {
   const response = await fetch(EARTHQUAKE_API_URL, {
     headers: { Accept: "application/json" },
+    // Bound the request so an unresponsive upstream can't hang the cron
+    // invocation until the Worker's wall-clock limit.
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!response.ok) {
     throw new Error(

@@ -8,7 +8,7 @@
  * friendly-error path.
  */
 import { env } from "cloudflare:test";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { executeCommand, matchesWatch } from "../src/lib/commands";
 import { seedRows, stripAnsi } from "./helpers";
 
@@ -191,6 +191,50 @@ describe("nearby", () => {
   it("returns a usage error for bad coordinates", async () => {
     const { text } = await executeCommand("nearby 999 999", env);
     expect(text).toContain("Usage: nearby");
+  });
+});
+
+describe("nearby across the antimeridian", () => {
+  // Two quakes straddling ±180° longitude, ~55km either side of the date line.
+  beforeAll(async () => {
+    await seedRows([
+      {
+        id: "dd00000000000001",
+        utcdatetime: "2026-06-20T00:00:00",
+        localdatetime: null,
+        lat: 0,
+        lon: 179.5,
+        depth: 10,
+        location: "West of the line",
+        location_original: "West",
+        magdefault: 5.0,
+        magtypedefault: "mb",
+        status: "NORMAL",
+      },
+      {
+        id: "dd00000000000002",
+        utcdatetime: "2026-06-21T00:00:00",
+        localdatetime: null,
+        lat: 0,
+        lon: -179.5,
+        depth: 10,
+        location: "East of the line",
+        location_original: "East",
+        magdefault: 5.0,
+        magtypedefault: "mb",
+        status: "NORMAL",
+      },
+    ]);
+  });
+  afterAll(async () => {
+    await seedRows(); // restore the shared SAMPLE_ROWS baseline
+  });
+
+  it("matches quakes on both sides of ±180° longitude", async () => {
+    // A box centred on lon 180 runs off the edge; the wrap-aware query must
+    // still catch the quake at -179.5 (pre-fix it fell outside a plain BETWEEN).
+    const { mapData } = await executeCommand("nearby 0 180 --radius 300", env);
+    expect(mapData?.features).toHaveLength(2);
   });
 });
 

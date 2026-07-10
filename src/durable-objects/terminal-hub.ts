@@ -22,10 +22,11 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env, EarthquakeRow } from "../types";
 import {
-  buildBanner,
+  computeYearSummary,
   executeCommand,
   matchesWatch,
   type WatchFilter,
+  type YearSummaryData,
 } from "../lib/commands";
 import {
   color,
@@ -120,6 +121,35 @@ function isInputMessage(value: unknown): value is InputMessage {
 
 export class TerminalHub extends DurableObject<Env> {
   /**
+   * Cached welcome-banner data (the year-at-a-glance aggregate query set) plus
+   * the table fingerprint it was computed from. The summary is tz-independent —
+   * only the rendered text depends on the viewer's timezone — so we compute it
+   * once and reuse it across every connecting socket, which keeps repeat
+   * connections off the several D1 aggregates the banner needs. In-memory only:
+   * a hibernation eviction resets it to null and the next connect recomputes.
+   */
+  private welcome: { key: string; data: YearSummaryData } | null = null;
+
+  /**
+   * Return the welcome-banner summary, recomputing the (expensive) aggregate
+   * query set only when the table has actually changed since we last cached it.
+   * The staleness check is a single O(1) probe — the largest rowid and newest
+   * timestamp — so it stays correct no matter how rows entered D1 (cron ingest,
+   * the admin route, or a direct write) without paying for the full query set
+   * on every connection.
+   */
+  private async getWelcomeSummary(): Promise<YearSummaryData> {
+    const fp = await this.env.DB.prepare(
+      `SELECT max(rowid) AS seq, max(utcdatetime) AS last FROM earthquakes`,
+    ).first<{ seq: number | null; last: string | null }>();
+    const key = `${fp?.seq ?? ""}:${fp?.last ?? ""}`;
+    if (this.welcome?.key !== key) {
+      this.welcome = { key, data: await computeYearSummary(this.env) };
+    }
+    return this.welcome.data;
+  }
+
+  /**
    * Upgrade an HTTP request to a WebSocket. The Worker routes `/ws` here (via
    * the DO stub's `.fetch()`); we complete the handshake and hand the server
    * end to the Hibernation manager, returning the client end with a 101.
@@ -147,11 +177,14 @@ export class TerminalHub extends DurableObject<Env> {
 
     // The welcome frame is the `banner` command's year-at-a-glance summary,
     // with its GeoJSON attached so the map shows markers as soon as the page
-    // opens. A D1 hiccup must not break connecting, so fall back to the plain
-    // static welcome screen.
+    // opens. The aggregate query set is cached across connections (see
+    // getWelcomeSummary) and only the tz-localised text is rendered per socket.
+    // A D1 hiccup must not break connecting, so fall back to the plain static
+    // welcome screen.
     let welcome: { text: string; mapData?: unknown };
     try {
-      welcome = await buildBanner(this.env, tz);
+      const { summary, mapData } = await this.getWelcomeSummary();
+      welcome = { text: renderWelcome(summary, tz), mapData };
     } catch (error) {
       console.error("Welcome banner build failed:", error);
       welcome = { text: renderWelcome() };
