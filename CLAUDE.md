@@ -33,6 +33,21 @@ popups) is shown 12-hour `MM-DD-YYYY hh:mm AM/PM` in that zone with a short zone
 label (e.g. `GMT+8`), falling back to UTC. Stored data stays UTC; `--since`
 filters, `trend`/`sparkline` bucket labels, and CSV/JSON exports remain UTC.
 
+**Responsive rendering (post-timezone)**: the UI adapts to screen size on two
+levels. Client-side (`public/`), the floating terminal uses `dvh` heights, a
+`@media (pointer: coarse)` touch-target bump, a compacted titlebar under 560px,
+and a JS-driven font size (`app.js` `applyResponsiveFont`, 11–14px) that shrinks
+on narrow widths so more columns fit. Server-side, the browser reports its
+terminal column count as `?cols=` on `/ws` (validated by `resolveCols`, persisted
+in the socket attachment) and again in every `{type:"input"}` frame (so it tracks
+resizes); the DO threads it into `executeCommand(line, env, tz?, width?)`, and the
+`format.ts` renderers adapt: the welcome banner drops its 58-col box for a compact
+header below ~58 cols, the `list`/`search`/`top`/alert table drops the ID column
+and shrinks LOCATION on tablet widths then becomes stacked two-line cards on a
+phone (<54 cols), and `nearby`/`trend`/`minimap` scale their columns/bars/grid to
+the width. `width` is always optional — `undefined` selects the full desktop
+layout, which is what raw ws clients and the test suite get.
+
 Current code:
 
 - `src/index.ts` — Worker entry (`fetch` + `scheduled`). Routes `POST /admin/ingest`

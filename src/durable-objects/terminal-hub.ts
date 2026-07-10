@@ -63,6 +63,8 @@ interface SocketState {
   watch: WatchFilter | null;
   rate?: RateWindow;
   tz?: string;
+  /** Viewer's terminal column count (from ?cols= / the input frame), for responsive rendering. */
+  cols?: number;
 }
 
 /** Read a socket's persisted state, tolerating the legacy bare-filter format. */
@@ -76,12 +78,23 @@ function readSocketState(ws: WebSocket): SocketState {
   if (
     raw &&
     typeof raw === "object" &&
-    ("watch" in raw || "rate" in raw || "tz" in raw)
+    ("watch" in raw || "rate" in raw || "tz" in raw || "cols" in raw)
   ) {
     return raw as SocketState;
   }
   // Pre-throttle attachment: a bare WatchFilter (Phase 8) or null.
   return { watch: (raw as WatchFilter | null) ?? null };
+}
+
+/**
+ * Sanitise a terminal column count reported by the browser (?cols= or the input
+ * frame). Clamps to a sane range; anything non-numeric → undefined (which the
+ * renderers treat as "full desktop layout").
+ */
+function resolveCols(raw: string | number | null | undefined): number | undefined {
+  const n = typeof raw === "string" ? Number(raw) : raw;
+  if (typeof n !== "number" || !Number.isFinite(n) || n <= 0) return undefined;
+  return Math.min(Math.max(Math.floor(n), 20), 400);
 }
 
 /** Persist a socket's state (in-memory tag, restored after hibernation). */
@@ -108,6 +121,8 @@ function tickRateLimit(state: SocketState): boolean {
 interface InputMessage {
   type: "input";
   line: string;
+  /** Current terminal column count, sent per command so responsive rendering tracks resizes. */
+  cols?: number;
 }
 
 function isInputMessage(value: unknown): value is InputMessage {
@@ -172,8 +187,12 @@ export class TerminalHub extends DurableObject<Env> {
     // frame we render — welcome, command output, alerts — shows the viewer's
     // local clock. Validate it here (an Intl round-trip) and persist it in the
     // socket attachment so it survives hibernation; missing/invalid → UTC.
-    const tz = resolveTimeZone(new URL(request.url).searchParams.get("tz"));
-    writeSocketState(server, { watch: null, tz });
+    // The browser also reports its terminal width as ?cols= (public/app.js) so
+    // the banner and tables render for its screen size; persist it alongside tz.
+    const params = new URL(request.url).searchParams;
+    const tz = resolveTimeZone(params.get("tz"));
+    const cols = resolveCols(params.get("cols"));
+    writeSocketState(server, { watch: null, tz, cols });
 
     // The welcome frame is the `banner` command's year-at-a-glance summary,
     // with its GeoJSON attached so the map shows markers as soon as the page
@@ -184,10 +203,10 @@ export class TerminalHub extends DurableObject<Env> {
     let welcome: { text: string; mapData?: unknown };
     try {
       const { summary, mapData } = await this.getWelcomeSummary();
-      welcome = { text: renderWelcome(summary, tz), mapData };
+      welcome = { text: renderWelcome(summary, tz, cols), mapData };
     } catch (error) {
       console.error("Welcome banner build failed:", error);
-      welcome = { text: renderWelcome() };
+      welcome = { text: renderWelcome(undefined, tz, cols) };
     }
     server.send(
       JSON.stringify({
@@ -254,11 +273,21 @@ export class TerminalHub extends DurableObject<Env> {
       return;
     }
 
+    // The client sends its current terminal width with each command so
+    // responsive rendering tracks resizes since connect; persist the latest so
+    // pushed alerts also use it. Fall back to the width captured at connect.
+    const cols = resolveCols(parsed.cols) ?? state.cols;
+    if (cols !== state.cols) {
+      state.cols = cols;
+      writeSocketState(ws, state);
+    }
+
     try {
       const { text, mapData, download, watch } = await executeCommand(
         parsed.line,
         this.env,
         state.tz,
+        cols,
       );
       // Phase 8: `watch`/`unwatch` store an alert filter on this very socket
       // (alongside the rate counter in the same attachment, so both survive DO
@@ -298,8 +327,9 @@ export class TerminalHub extends DurableObject<Env> {
   broadcastNewEarthquakes(records: EarthquakeRow[]): void {
     if (records.length === 0) return;
 
-    // Unfiltered frames keyed by timezone, rendered once per zone and reused
-    // for every socket without a `watch` subscription (the common case).
+    // Unfiltered frames keyed by timezone + width, rendered once per
+    // (zone,width) and reused for every socket without a `watch` subscription
+    // (the common case) that shares both.
     const framesByZone = new Map<string, string>();
 
     for (const ws of this.ctx.getWebSockets()) {
@@ -312,13 +342,13 @@ export class TerminalHub extends DurableObject<Env> {
       if (filter) {
         const visible = records.filter((r) => matchesWatch(r, filter));
         if (visible.length === 0) continue; // nothing this terminal cares about
-        frame = this.alertFrame(visible, state.tz);
+        frame = this.alertFrame(visible, state.tz, state.cols);
       } else {
-        const zoneKey = state.tz ?? "";
-        let cached = framesByZone.get(zoneKey);
+        const key = `${state.tz ?? ""}|${state.cols ?? ""}`;
+        let cached = framesByZone.get(key);
         if (cached === undefined) {
-          cached = this.alertFrame(records, state.tz);
-          framesByZone.set(zoneKey, cached);
+          cached = this.alertFrame(records, state.tz, state.cols);
+          framesByZone.set(key, cached);
         }
         frame = cached;
       }
@@ -337,13 +367,17 @@ export class TerminalHub extends DurableObject<Env> {
    * flag the client uses to ring the terminal bell when something significant
    * (≥ {@link BELL_MAGNITUDE}) arrives.
    */
-  private alertFrame(records: EarthquakeRow[], tz?: string): string {
+  private alertFrame(
+    records: EarthquakeRow[],
+    tz?: string,
+    width?: number,
+  ): string {
     const peak = Math.max(
       ...records.map((r) => r.magdefault ?? -Infinity),
     );
     return JSON.stringify({
       type: "alert",
-      text: renderAlertBanner(records, tz),
+      text: renderAlertBanner(records, tz, width),
       // Phase 6: the map upserts these points without clearing existing ones.
       mapData: rowsToGeoJSON(records),
       bell: peak >= BELL_MAGNITUDE,

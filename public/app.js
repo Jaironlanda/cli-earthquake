@@ -35,21 +35,43 @@ const fitAddon = new FitAddon.FitAddon();
 term.loadAddon(fitAddon);
 // Makes URLs in terminal output (e.g. the banner's author link) clickable.
 term.loadAddon(new WebLinksAddon.WebLinksAddon());
-term.open(document.getElementById("terminal"));
-fitAddon.fit();
+const termEl = document.getElementById("terminal");
+term.open(termEl);
+
+// Responsive font sizing. The fixed-width tables and banners are wide (the
+// `list` table alone is ~87 columns), so on narrow screens we shrink the font
+// — down to a readable floor — to keep as many columns visible as possible
+// before xterm wraps. Desktop stays at the base size; FitAddon then recomputes
+// rows/cols for whatever size we pick.
+const FONT_MIN = 11;
+const FONT_MAX = 14;
+const TARGET_COLS = 64; // aim to keep at least this many columns on screen
+
+function applyResponsiveFont() {
+	const width = termEl.clientWidth;
+	if (!width) return; // hidden (e.g. minimized) — nothing to measure
+	// Monospace glyphs advance ~0.6em; pick the largest in-range font size that
+	// still fits ~TARGET_COLS columns in the current window width.
+	const ideal = Math.floor(width / (TARGET_COLS * 0.6));
+	const size = Math.max(FONT_MIN, Math.min(FONT_MAX, ideal));
+	if (size !== term.options.fontSize) term.options.fontSize = size;
+}
 
 // Refit on resize (and after the browser settles layout on load). The window
 // can also change size without a viewport resize (maximize/restore), so a
-// ResizeObserver on the terminal container catches those too.
+// ResizeObserver on the terminal container catches those too. Each refit first
+// re-picks the responsive font size for the new width.
 const refit = () => {
 	try {
+		applyResponsiveFont();
 		fitAddon.fit();
 	} catch {
 		/* terminal not yet visible */
 	}
 };
+refit();
 window.addEventListener("resize", refit);
-new ResizeObserver(refit).observe(document.getElementById("terminal"));
+new ResizeObserver(refit).observe(termEl);
 
 // --- Line-editing state ----------------------------------------------------
 
@@ -112,8 +134,13 @@ try {
 function connect() {
 	const proto = location.protocol === "https:" ? "wss:" : "ws:";
 	setStatus("connecting", greeted ? "reconnecting…" : "connecting…");
-	const tzParam = userTimeZone ? `?tz=${encodeURIComponent(userTimeZone)}` : "";
-	ws = new WebSocket(`${proto}//${location.host}/ws${tzParam}`);
+	// Report the viewer's timezone and current terminal width so the server
+	// renders timestamps in local time and sizes the banner/tables to the screen.
+	const params = new URLSearchParams();
+	if (userTimeZone) params.set("tz", userTimeZone);
+	if (term.cols) params.set("cols", String(term.cols));
+	const query = params.toString();
+	ws = new WebSocket(`${proto}//${location.host}/ws${query ? `?${query}` : ""}`);
 
 	ws.onopen = () => {
 		reconnectDelay = 500;
@@ -256,7 +283,9 @@ function submit() {
 	}
 
 	busy = true;
-	ws.send(JSON.stringify({ type: "input", line: value }));
+	// Send the current terminal width so responsive rendering tracks any resize
+	// (or font-size change) since the socket opened.
+	ws.send(JSON.stringify({ type: "input", line: value, cols: term.cols }));
 }
 
 // --- Key handling ----------------------------------------------------------

@@ -406,6 +406,44 @@ describe("viewer timezone", () => {
   });
 });
 
+describe("responsive layout (terminal width)", () => {
+  // executeCommand(line, env, tz?, width?) — width is the viewer's column count.
+  it("list renders the full multi-column table without a width", async () => {
+    const { text } = await executeCommand("list", env);
+    const plain = stripAnsi(text);
+    expect(plain).toContain("TIME (UTC)"); // header row
+    expect(plain).toContain("LOCATION");
+    expect(plain).toMatch(/\baaaa000000000001\b/); // ID column present
+  });
+
+  it("list drops the ID column on a medium (tablet) width", async () => {
+    const { text } = await executeCommand("list", env, undefined, 60);
+    const plain = stripAnsi(text);
+    expect(plain).toContain("TIME (UTC)"); // still a table…
+    expect(plain).not.toContain("LOCATION                            "); // …but narrower
+    expect(plain).not.toMatch(/\baaaa000000000001\b/); // ID column dropped
+  });
+
+  it("list becomes stacked cards on a phone width", async () => {
+    const { text } = await executeCommand("list", env, undefined, 40);
+    const plain = stripAnsi(text);
+    expect(plain).not.toContain("TIME (UTC)"); // no table header
+    expect(plain).toContain("Aceh, Indonesia"); // card shows the location
+    expect(plain).toMatch(/M6\.2\s+Aceh, Indonesia/); // magnitude badge + location
+    expect(plain).toContain("3 records");
+  });
+
+  it("banner keeps its framed box at desktop width but drops it on a phone", async () => {
+    const wide = stripAnsi((await executeCommand("banner", env, undefined, 100)).text);
+    expect(wide).toContain("╭"); // box drawn
+
+    const narrow = stripAnsi((await executeCommand("banner", env, undefined, 40)).text);
+    expect(narrow).not.toContain("╭"); // box dropped
+    expect(narrow).toContain("E A R T H Q U A K E"); // wordmark still present
+    expect(narrow).toContain("2026 at a glance");
+  });
+});
+
 /** The seeded Aceh row (6.2), for direct matchesWatch unit tests. */
 function SAMPLE_ROW_ACEH() {
   return {
