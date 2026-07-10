@@ -268,6 +268,7 @@ async function runList(
   env: Env,
   tokens: string[],
   tz?: string,
+  width?: number,
 ): Promise<CommandResult> {
   const args = parseArgs(
     tokens,
@@ -275,7 +276,7 @@ async function runList(
   );
   const limit = clamp(args.limit ?? DEFAULT_LIMIT, 1, MAX_LIMIT);
   const rows = await queryRows(env, args, limit);
-  return { text: renderEarthquakeTable(rows, tz), mapData: rowsToGeoJSON(rows) };
+  return { text: renderEarthquakeTable(rows, tz, width), mapData: rowsToGeoJSON(rows) };
 }
 
 /**
@@ -286,6 +287,7 @@ async function runSearch(
   env: Env,
   tokens: string[],
   tz?: string,
+  width?: number,
 ): Promise<CommandResult> {
   const query = tokens.join(" ").trim();
   if (!query) {
@@ -321,7 +323,7 @@ async function runSearch(
     .all<EarthquakeRow>();
 
   const rows = results ?? [];
-  return { text: renderEarthquakeTable(rows, tz), mapData: rowsToGeoJSON(rows) };
+  return { text: renderEarthquakeTable(rows, tz, width), mapData: rowsToGeoJSON(rows) };
 }
 
 /** `export csv|json [filters]` — serialize the filtered set to a download. */
@@ -413,9 +415,14 @@ async function queryBuckets(
 }
 
 /** `trend [--by day|month] [filters]` — ASCII histogram of counts over time. */
-async function runTrend(env: Env, tokens: string[]): Promise<CommandResult> {
+async function runTrend(
+  env: Env,
+  tokens: string[],
+  _tz?: string,
+  width?: number,
+): Promise<CommandResult> {
   const { buckets, by } = await queryBuckets(env, tokens);
-  return { text: renderTrend(buckets, by) };
+  return { text: renderTrend(buckets, by, width) };
 }
 
 /** `sparkline [--by day|month] [filters]` — one-line Unicode trend. */
@@ -496,6 +503,7 @@ async function runNearby(
   env: Env,
   tokens: string[],
   tz?: string,
+  width?: number,
 ): Promise<CommandResult> {
   const lat = Number(tokens[0]);
   const lon = Number(tokens[1]);
@@ -557,7 +565,7 @@ async function runNearby(
     .slice(0, limit);
 
   return {
-    text: renderNearbyTable(ranked, { lat, lon }, tz),
+    text: renderNearbyTable(ranked, { lat, lon }, tz, width),
     mapData: rowsToGeoJSON(ranked),
   };
 }
@@ -567,6 +575,7 @@ async function runTop(
   env: Env,
   tokens: string[],
   tz?: string,
+  width?: number,
 ): Promise<CommandResult> {
   const args = parseArgs(
     tokens,
@@ -589,7 +598,7 @@ async function runTop(
 
   const rows = results ?? [];
   const heading = bold(`Top ${rows.length} by ${by === "depth" ? "depth" : "magnitude"}`) + EOL + EOL;
-  return { text: heading + renderEarthquakeTable(rows, tz), mapData: rowsToGeoJSON(rows) };
+  return { text: heading + renderEarthquakeTable(rows, tz, width), mapData: rowsToGeoJSON(rows) };
 }
 
 /** `compare <A> <B>` — side-by-side counts/magnitudes for two location terms. */
@@ -678,14 +687,19 @@ async function runFelt(
 }
 
 /** `minimap [filters]` — plot recent quakes on a small ASCII lat/lon grid. */
-async function runMinimap(env: Env, tokens: string[]): Promise<CommandResult> {
+async function runMinimap(
+  env: Env,
+  tokens: string[],
+  _tz?: string,
+  width?: number,
+): Promise<CommandResult> {
   const args = parseArgs(
     tokens,
     new Set<OptionKey>(["mag", "since", "location", "limit"]),
   );
   const limit = clamp(args.limit ?? 200, 1, 1000);
   const rows = await queryRows(env, args, limit);
-  return { text: renderMinimap(rows), mapData: rowsToGeoJSON(rows) };
+  return { text: renderMinimap(rows, width), mapData: rowsToGeoJSON(rows) };
 }
 
 /** Newest rows the `banner` year summary plots on the map. */
@@ -782,14 +796,23 @@ export async function computeYearSummary(env: Env): Promise<YearSummaryData> {
  * fallback, so opening the site shows the same summary. `tz` localises the
  * summary's timestamps to the viewer's timezone.
  */
-export async function buildBanner(env: Env, tz?: string): Promise<CommandResult> {
+export async function buildBanner(
+  env: Env,
+  tz?: string,
+  width?: number,
+): Promise<CommandResult> {
   const { summary, mapData } = await computeYearSummary(env);
-  return { text: renderWelcome(summary, tz), mapData };
+  return { text: renderWelcome(summary, tz, width), mapData };
 }
 
 /** `banner` — the year-at-a-glance welcome screen (aka `about`). */
-function runBanner(env: Env, _tokens: string[], tz?: string): Promise<CommandResult> {
-  return buildBanner(env, tz);
+function runBanner(
+  env: Env,
+  _tokens: string[],
+  tz?: string,
+  width?: number,
+): Promise<CommandResult> {
+  return buildBanner(env, tz, width);
 }
 
 /** `watch [--mag>N] [--location STR]` — subscribe this terminal to matching alerts. */
@@ -846,11 +869,16 @@ interface CommandSpec {
   usage: string;
   summary: string;
   options: OptionDoc[];
-  /** `tz` is the connecting browser's IANA timezone (undefined → UTC output). */
+  /**
+   * `tz` is the connecting browser's IANA timezone (undefined → UTC output);
+   * `width` is its terminal column count (undefined → full desktop layout), so
+   * renderers can adapt tables and the banner to small screens.
+   */
   run: (
     env: Env,
     args: string[],
     tz?: string,
+    width?: number,
   ) => Promise<CommandResult> | CommandResult;
 }
 
@@ -1078,6 +1106,7 @@ export async function executeCommand(
   line: string,
   env: Env,
   tz?: string,
+  width?: number,
 ): Promise<CommandResult> {
   const tokens = tokenize(line.trim());
   if (tokens.length === 0) return { text: "" };
@@ -1095,7 +1124,7 @@ export async function executeCommand(
   }
 
   try {
-    return await spec.run(env, args, tz);
+    return await spec.run(env, args, tz, width);
   } catch (error) {
     if (error instanceof CommandError) {
       return { text: color(`Error: ${error.message}`, "red") };

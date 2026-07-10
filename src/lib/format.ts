@@ -76,6 +76,44 @@ function cell(text: string, width: number): string {
 /** Newline used between terminal lines. `\r\n` so xterm.js returns the cursor. */
 export const EOL = "\r\n";
 
+// --- Responsive layout --------------------------------------------------------
+//
+// The browser reports its terminal column count when it connects and with each
+// command (public/app.js → ?cols= / the input frame's `cols`); the renderers
+// below adapt their fixed-width output to it so the banner and tables stay
+// readable from a wide desktop down to a ~34-column phone. `width` is always
+// optional: `undefined` means "unknown" and selects the full desktop layout —
+// which is also what raw ws clients and the test-suite get, keeping their
+// output stable.
+
+/** A viewer's terminal width in columns, or `undefined` when unknown. */
+export type LayoutWidth = number | undefined;
+
+/** Below this many columns a wide table is redrawn as stacked cards. */
+const CARD_WIDTH = 54;
+/** At/above this width the earthquake table shows every column (its full 87-col layout). */
+const FULL_TABLE_WIDTH = 87;
+/** Below this width the welcome banner drops its box for a compact header. */
+const COMPACT_BANNER_WIDTH = 58;
+
+/** Column count to size against when a concrete number is needed. */
+function usableWidth(width: LayoutWidth, fallback = 80): number {
+  return typeof width === "number" && width > 0 ? Math.floor(width) : fallback;
+}
+
+/** Clamp an integer to the inclusive range [min, max]. */
+function clampInt(n: number, min: number, max: number): number {
+  return Math.min(Math.max(Math.round(n), min), max);
+}
+
+/** Truncate `text` to `max` columns with an ellipsis — like {@link cell} but unpadded. */
+function clip(text: string, max: number): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (clean.length <= max) return clean;
+  if (max <= 1) return clean.slice(0, Math.max(0, max));
+  return clean.slice(0, max - 1) + "…";
+}
+
 // --- Viewer-timezone time formatting -----------------------------------------
 //
 // Stored timestamps are UTC ISO strings with no zone suffix ("2026-07-05T09:30:00",
@@ -165,19 +203,38 @@ export function makeTimeFormatter(tz?: string): TimeFormatter {
  * Magnitude is coloured per {@link magnitudeColor}; the header is bold.
  * Times are shown in the viewer's timezone (`tz`), named in the header.
  */
-export function renderEarthquakeTable(rows: EarthquakeRow[], tz?: string): string {
+export function renderEarthquakeTable(
+  rows: EarthquakeRow[],
+  tz?: string,
+  width?: LayoutWidth,
+): string {
   if (rows.length === 0) {
     return dim("No matching earthquakes.");
   }
 
   const fmt = makeTimeFormatter(tz);
+
+  // Phones: a fixed-width table would wrap every row into a mess, so lay each
+  // quake out as a two-line card instead.
+  if (width !== undefined && width < CARD_WIDTH) {
+    return renderEarthquakeCards(rows, fmt, usableWidth(width));
+  }
+
+  // Desktop shows every column; on a medium (tablet) width we drop the ID
+  // column and give LOCATION whatever room is left so the row still fits.
+  const full = width === undefined || width >= FULL_TABLE_WIDTH;
   const columns: Column[] = [
     { header: `TIME (${fmt.label})`, width: 19 },
     { header: "MAG", width: 4 },
     { header: "DEPTH", width: 6 },
-    { header: "LOCATION", width: 34 },
-    { header: "ID", width: 16 },
   ];
+  if (full) {
+    columns.push({ header: "LOCATION", width: 34 }, { header: "ID", width: 16 });
+  } else {
+    // 3 columns above + LOCATION, joined by 3 two-space gaps (=6 cols of gap).
+    const locWidth = clampInt(usableWidth(width) - (19 + 4 + 6 + 6), 14, 40);
+    columns.push({ header: "LOCATION", width: locWidth });
+  }
 
   const gap = "  ";
   const headerLine = bold(
@@ -185,15 +242,14 @@ export function renderEarthquakeTable(rows: EarthquakeRow[], tz?: string): strin
   );
 
   const lines = rows.map((row) => {
-    const time = cell(fmt.dateTime(row.utcdatetime), columns[0].width);
-    const mag = formatMagnitude(row.magdefault, columns[1].width);
-    const depth = cell(
-      row.depth === null ? "—" : `${row.depth}km`,
-      columns[2].width,
-    );
-    const location = cell(row.location ?? "—", columns[3].width);
-    const id = dim(cell(row.id, columns[4].width));
-    return [time, mag, depth, location, id].join(gap);
+    const cells = [
+      cell(fmt.dateTime(row.utcdatetime), columns[0].width),
+      formatMagnitude(row.magdefault, columns[1].width),
+      cell(row.depth === null ? "—" : `${row.depth}km`, columns[2].width),
+      cell(row.location ?? "—", columns[3].width),
+    ];
+    if (full) cells.push(dim(cell(row.id, columns[4].width)));
+    return cells.join(gap);
   });
 
   const footer = dim(
@@ -201,6 +257,29 @@ export function renderEarthquakeTable(rows: EarthquakeRow[], tz?: string): strin
   );
 
   return [headerLine, ...lines, "", footer].join(EOL);
+}
+
+/**
+ * Narrow-screen fallback for {@link renderEarthquakeTable}: one quake per two
+ * lines — a coloured magnitude badge and location, then a dimmed time · depth
+ * line indented beneath it — so the feed stays readable on a phone without a
+ * table wrapping.
+ */
+function renderEarthquakeCards(
+  rows: EarthquakeRow[],
+  fmt: TimeFormatter,
+  width: number,
+): string {
+  const lines: string[] = [];
+  for (const row of rows) {
+    const badge = (row.magdefault === null ? "M —" : `M${row.magdefault.toFixed(1)}`).padEnd(5);
+    const loc = clip(row.location ?? "—", Math.max(6, width - 6));
+    const depth = row.depth === null ? "—" : `${row.depth}km`;
+    lines.push(color(badge, magnitudeColor(row.magdefault)) + " " + loc);
+    lines.push(dim(`      ${fmt.dateTime(row.utcdatetime)} · ${depth}`));
+  }
+  const footer = dim(`${rows.length} record${rows.length === 1 ? "" : "s"}.`);
+  return [...lines, "", footer].join(EOL);
 }
 
 /**
@@ -227,7 +306,17 @@ export interface YearSummary {
  * hint. Pure ANSI + ASCII in the frame (no wide Unicode) so the box stays
  * aligned in xterm.js at any width. `tz` localises the summary's timestamps.
  */
-export function renderWelcome(summary?: YearSummary, tz?: string): string {
+export function renderWelcome(
+  summary?: YearSummary,
+  tz?: string,
+  width?: LayoutWidth,
+): string {
+  // Phones can't hold the 58-column framed banner without wrapping the box, so
+  // below that width we render a compact, box-less header instead.
+  if (width !== undefined && width < COMPACT_BANNER_WIDTH) {
+    return renderWelcomeCompact(summary, tz, width);
+  }
+
   const W = 54; // inner content width, in characters
   const top = dim("╭" + "─".repeat(W + 2) + "╮");
   const bot = dim("╰" + "─".repeat(W + 2) + "╯");
@@ -264,34 +353,89 @@ export function renderWelcome(summary?: YearSummary, tz?: string): string {
     dim(" for the latest quakes.");
 
   const lines = [...banner, "", ...status];
-  if (summary) lines.push("", ...yearSummaryLines(summary, tz));
+  if (summary) lines.push("", ...yearSummaryLines(summary, tz, width));
   lines.push("", hint);
+  return lines.join(EOL);
+}
+
+/**
+ * Narrow-screen welcome banner (phones): the framed 58-column box is dropped
+ * for a compact, left-aligned header — a width-fit seismograph trace, the
+ * wordmark, and a short status readout — plus the same year-at-a-glance block,
+ * which {@link yearSummaryLines} renders compactly at this width.
+ */
+function renderWelcomeCompact(
+  summary: YearSummary | undefined,
+  tz: string | undefined,
+  width: number,
+): string {
+  const w = usableWidth(width, 40);
+  const traceLen = clampInt(w, 12, 40);
+  const trace = "_/\\".repeat(Math.ceil(traceLen / 3)).slice(0, traceLen);
+  const wordmark = w >= 26 ? "E A R T H Q U A K E   C L I" : "EARTHQUAKE CLI";
+
+  const bullet = (label: string, value: string) =>
+    "  " + color("•", "cyan") + " " + dim(label.padEnd(9)) + value;
+
+  const lines = [
+    color(trace, "gray"),
+    bold(color(wordmark, "cyan")),
+    dim(clip("live seismic data · api.data.gov.my", w)),
+    "",
+    bullet("feed", "api.data.gov.my"),
+    bullet("updates", "every 15 min · alerts on"),
+    bullet("map", "MapLibre + Protomaps"),
+  ];
+  if (summary) lines.push("", ...yearSummaryLines(summary, tz, width));
+  lines.push(
+    "",
+    dim("Type ") +
+      bold(color("help", "cyan")) +
+      dim(" or ") +
+      bold(color("list", "cyan")) +
+      dim(" to start."),
+  );
   return lines.join(EOL);
 }
 
 /**
  * The year-at-a-glance block inside {@link renderWelcome}: headline count,
  * strongest and latest events, average magnitude, and a per-month trend
- * sparkline. Bullet style matches the status readout above it.
+ * sparkline. Bullet style matches the status readout above it. On a narrow
+ * `width` the event lines drop the trailing timestamp and clip the location so
+ * each stays on one row.
  */
-function yearSummaryLines(s: YearSummary, tz?: string): string[] {
+function yearSummaryLines(s: YearSummary, tz?: string, width?: LayoutWidth): string[] {
   const heading = "  " + bold(color(`${s.year} at a glance`, "cyan"));
   if (s.total === 0) {
     return [heading, dim(`    No earthquakes recorded in ${s.year} yet.`)];
   }
+
+  // Narrow terminals drop the trailing timestamp and clip the location so each
+  // event readout stays on one line beside its bullet label.
+  const compact = width !== undefined && width < COMPACT_BANNER_WIDTH;
+  const w = usableWidth(width, 80);
 
   const bullet = (label: string, value: string) =>
     "  " + color("•", "cyan") + " " + dim(label.padEnd(10)) + value;
 
   /** One-line event readout: coloured magnitude, location, dimmed viewer-tz time. */
   const fmt = makeTimeFormatter(tz);
-  const event = (row: EarthquakeRow) =>
-    color(
+  const event = (row: EarthquakeRow) => {
+    const mag = color(
       row.magdefault === null ? "M?" : `M${row.magdefault.toFixed(1)}`,
       magnitudeColor(row.magdefault),
-    ) +
-    ` ${row.location ?? "—"}` +
-    dim(`  ${fmt.dateTime(row.utcdatetime)} ${fmt.label}`);
+    );
+    if (compact) {
+      // Bullet prefix (~14) + mag (~5) already spent; give the rest to location.
+      return mag + " " + clip(row.location ?? "—", Math.max(8, w - 20));
+    }
+    return (
+      mag +
+      ` ${row.location ?? "—"}` +
+      dim(`  ${fmt.dateTime(row.utcdatetime)} ${fmt.label}`)
+    );
+  };
 
   const lines = [
     heading,
@@ -319,12 +463,10 @@ function yearSummaryLines(s: YearSummary, tz?: string): string[] {
         return color(SPARK_CHARS[level], magnitudeColor(m.maxmag));
       })
       .join("");
-    lines.push(
-      bullet(
-        "by month",
-        spark + dim(`  ${s.months[0].bucket} → ${s.months[s.months.length - 1].bucket}`),
-      ),
-    );
+    const range = compact
+      ? ""
+      : dim(`  ${s.months[0].bucket} → ${s.months[s.months.length - 1].bucket}`);
+    lines.push(bullet("by month", spark + range));
   }
   return lines;
 }
@@ -339,7 +481,11 @@ const ALERT_MAX_ROWS = 10;
  * are shown first, capped at {@link ALERT_MAX_ROWS}, with a count of the rest.
  * `tz` localises the table's timestamps to the receiving terminal's timezone.
  */
-export function renderAlertBanner(rows: EarthquakeRow[], tz?: string): string {
+export function renderAlertBanner(
+  rows: EarthquakeRow[],
+  tz?: string,
+  width?: LayoutWidth,
+): string {
   if (rows.length === 0) return "";
 
   const sorted = [...rows].sort(
@@ -354,7 +500,7 @@ export function renderAlertBanner(rows: EarthquakeRow[], tz?: string): string {
       `${rows.length} new earthquake${rows.length === 1 ? "" : "s"} detected`,
     );
 
-  const body = renderEarthquakeTable(shown, tz);
+  const body = renderEarthquakeTable(shown, tz, width);
 
   const lines = [heading, "", body];
   const hidden = rows.length - shown.length;
@@ -380,7 +526,11 @@ const TREND_BAR_WIDTH = 40;
  * `trend --by day|month`). Buckets arrive oldest-first; each bar is scaled to
  * the busiest bucket and coloured by that bucket's peak magnitude.
  */
-export function renderTrend(buckets: TrendBucket[], by: string): string {
+export function renderTrend(
+  buckets: TrendBucket[],
+  by: string,
+  width?: LayoutWidth,
+): string {
   if (buckets.length === 0) {
     return dim("No earthquakes match — nothing to chart.");
   }
@@ -389,12 +539,19 @@ export function renderTrend(buckets: TrendBucket[], by: string): string {
   const labelWidth = Math.max(...buckets.map((b) => b.bucket.length));
   const countWidth = String(maxCount).length;
 
+  // Shrink the longest bar so `label  bar count` fits the viewer's width
+  // (label + 2 gap + bar + 1 space + count), capped at the desktop default.
+  const barMax =
+    width === undefined
+      ? TREND_BAR_WIDTH
+      : clampInt(usableWidth(width) - labelWidth - countWidth - 3, 6, TREND_BAR_WIDTH);
+
   const heading = bold(`Earthquakes per ${by}`);
 
   const lines = buckets.map((b) => {
     const label = dim(b.bucket.padEnd(labelWidth));
     // At least one block for any non-zero bucket so small counts stay visible.
-    const filled = Math.max(1, Math.round((b.count / maxCount) * TREND_BAR_WIDTH));
+    const filled = Math.max(1, Math.round((b.count / maxCount) * barMax));
     const bar = color("█".repeat(filled), magnitudeColor(b.maxmag));
     const count = String(b.count).padStart(countWidth);
     return `${label}  ${bar} ${count}`;
@@ -494,6 +651,7 @@ export function renderNearbyTable(
   rows: RowWithDistance[],
   origin: { lat: number; lon: number },
   tz?: string,
+  width?: LayoutWidth,
 ): string {
   const head =
     bold(`Earthquakes near ${origin.lat.toFixed(3)}, ${origin.lon.toFixed(3)}`) +
@@ -505,22 +663,31 @@ export function renderNearbyTable(
 
   const fmt = makeTimeFormatter(tz);
   const gap = "  ";
+  // The full table is ~75 columns; below that we drop the TIME column and give
+  // LOCATION the room that's left so distance/magnitude stay visible on a phone.
+  const showTime = width === undefined || width >= 72;
   const cols = [
     { header: "DIST", width: 8 },
     { header: "MAG", width: 4 },
     { header: "DEPTH", width: 6 },
     { header: "LOCATION", width: 30 },
-    { header: `TIME (${fmt.label})`, width: 19 },
   ];
+  if (showTime) {
+    cols.push({ header: `TIME (${fmt.label})`, width: 19 });
+  } else {
+    cols[3].width = clampInt(usableWidth(width) - (8 + 4 + 6 + 6), 14, 30);
+  }
   const headerLine = bold(cols.map((c) => c.header.padEnd(c.width)).join(gap));
 
   const body = rows.map((r) => {
-    const dist = cell(`${r.distanceKm.toFixed(0)}km`, cols[0].width);
-    const mag = formatMagnitude(r.magdefault, cols[1].width);
-    const depth = cell(r.depth === null ? "—" : `${r.depth}km`, cols[2].width);
-    const loc = cell(r.location ?? "—", cols[3].width);
-    const time = dim(cell(fmt.dateTime(r.utcdatetime), cols[4].width));
-    return [dist, mag, depth, loc, time].join(gap);
+    const cells = [
+      cell(`${r.distanceKm.toFixed(0)}km`, cols[0].width),
+      formatMagnitude(r.magdefault, cols[1].width),
+      cell(r.depth === null ? "—" : `${r.depth}km`, cols[2].width),
+      cell(r.location ?? "—", cols[3].width),
+    ];
+    if (showTime) cells.push(dim(cell(fmt.dateTime(r.utcdatetime), cols[4].width)));
+    return cells.join(gap);
   });
 
   const footer = dim(`${rows.length} within range.`);
@@ -602,7 +769,7 @@ export function renderSparkline(buckets: TrendBucket[], by: string): string {
 }
 
 /** Render recent quakes as points on a small ASCII lat/lon grid (`minimap`). */
-export function renderMinimap(rows: EarthquakeRow[]): string {
+export function renderMinimap(rows: EarthquakeRow[], width?: LayoutWidth): string {
   const pts = rows.filter(
     (r) => Number.isFinite(r.lat) && Number.isFinite(r.lon),
   );
@@ -610,8 +777,10 @@ export function renderMinimap(rows: EarthquakeRow[]): string {
     return dim("No plottable earthquakes (missing coordinates).");
   }
 
-  const W = 48;
-  const H = 16;
+  // The grid is bordered by a "|" each side, so it can be at most width-2 wide;
+  // keep the ~3:1 aspect the default 48×16 used so the map isn't stretched.
+  const W = width === undefined ? 48 : clampInt(usableWidth(width) - 2, 20, 48);
+  const H = clampInt(W / 3, 8, 16);
   let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
   for (const p of pts) {
     minLat = Math.min(minLat, p.lat);
